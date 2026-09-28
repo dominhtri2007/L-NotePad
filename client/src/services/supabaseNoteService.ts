@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured } from './supabaseClient';
+import { supabase, isSupabaseConfigured, getSupabase } from './supabaseClient';
 import bcrypt from 'bcryptjs';
 
 export interface SupabaseNote {
@@ -12,14 +12,16 @@ export interface SupabaseNote {
 }
 
 export const supabaseNoteService = {
-  isAvailable() {
-    return isSupabaseConfigured && supabase !== null;
+  isAvailable(): boolean {
+    return isSupabaseConfigured() && getSupabase() !== null;
   },
 
   async getNote(slug: string): Promise<SupabaseNote | null> {
     if (!this.isAvailable()) return null;
     try {
-      const { data, error } = await supabase!
+      const client = getSupabase();
+      if (!client) return null;
+      const { data, error } = await client
         .from('notes')
         .select('*')
         .eq('slug', slug)
@@ -39,6 +41,8 @@ export const supabaseNoteService = {
   async saveNote(slug: string, updates: Partial<{ content: string; language: string; password?: string | null; ownerId?: string | null }>): Promise<boolean> {
     if (!this.isAvailable()) return false;
     try {
+      const client = getSupabase();
+      if (!client) return false;
       const payload: any = {
         slug,
         updated_at: new Date().toISOString(),
@@ -48,7 +52,7 @@ export const supabaseNoteService = {
       if (updates.password !== undefined) payload.password = updates.password;
       if (updates.ownerId !== undefined) payload.owner_id = updates.ownerId;
 
-      const { error } = await supabase!
+      const { error } = await client
         .from('notes')
         .upsert(payload, { onConflict: 'slug' });
 
@@ -66,6 +70,8 @@ export const supabaseNoteService = {
   async changeSlug(oldSlug: string, newSlug: string): Promise<{ success: boolean; error?: string }> {
     if (!this.isAvailable()) return { success: false, error: 'Supabase chưa được cấu hình' };
     try {
+      const client = getSupabase();
+      if (!client) return { success: false, error: 'Supabase client không sẵn sàng' };
       const existingNew = await this.getNote(newSlug);
       if (existingNew) {
         return { success: false, error: 'URL mới này đã được sử dụng, vui lòng chọn tên khác' };
@@ -77,7 +83,7 @@ export const supabaseNoteService = {
       }
 
       // Insert new note with old content
-      const { error: insertErr } = await supabase!
+      const { error: insertErr } = await client
         .from('notes')
         .insert({
           ...oldNote,
@@ -87,7 +93,7 @@ export const supabaseNoteService = {
       if (insertErr) return { success: false, error: insertErr.message };
 
       // Delete old note
-      await supabase!.from('notes').delete().eq('slug', oldSlug);
+      await client.from('notes').delete().eq('slug', oldSlug);
 
       return { success: true };
     } catch (err: any) {
@@ -98,7 +104,9 @@ export const supabaseNoteService = {
   async getUserNotes(userId: string): Promise<SupabaseNote[]> {
     if (!this.isAvailable() || !userId) return [];
     try {
-      const { data, error } = await supabase!
+      const client = getSupabase();
+      if (!client) return [];
+      const { data, error } = await client
         .from('notes')
         .select('*')
         .eq('owner_id', userId)
@@ -124,3 +132,4 @@ export const supabaseNoteService = {
     }
   },
 };
+

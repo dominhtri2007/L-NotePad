@@ -8,7 +8,7 @@ import { Toolbar } from '../components/Toolbar';
 import { useLanguage } from '../context/LanguageContext';
 import { Eye, Edit3, ShieldAlert } from 'lucide-react';
 import { getSocketUrl } from '../config';
-import { supabase } from '../services/supabaseClient';
+import { getSupabase } from '../services/supabaseClient';
 import { supabaseNoteService } from '../services/supabaseNoteService';
 
 export const SharePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; setIsDarkMode: (v: boolean) => void }) => {
@@ -38,7 +38,9 @@ export const SharePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; 
         setLanguage(note.language || 'plaintext');
       });
 
-      const channel = supabase!.channel(`note-room:${slug}`, {
+      const client = getSupabase();
+      if (!client) return;
+      const channel = client.channel(`note-room:${slug}`, {
         config: { broadcast: { self: false } },
       });
 
