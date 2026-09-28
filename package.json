@@ -2,6 +2,7 @@
   "name": "live-notepad-system",
   "version": "1.0.0",
   "description": "Full-stack Realtime Online Notepad System",
+  "license": "MIT",
   "scripts": {
     "install:all": "npm install && cd server && npm install && cd ../client && npm install",
     "dev:server": "cd server && npm run dev",
