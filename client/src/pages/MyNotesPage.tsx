@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { BookOpen, Lock, ArrowRight, Copy, Check, Plus, Search } from 'lucide-react';
 import { generateRandomSlug } from '../utils/slug';
+import { getApiUrl } from '../config';
 
 export const MyNotesPage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; setIsDarkMode: (v: boolean) => void }) => {
   const { token } = useAuth();
@@ -17,7 +18,7 @@ export const MyNotesPage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean
 
   useEffect(() => {
     if (!token) { navigate('/'); return; }
-    fetch('/api/notes/my', { headers: { Authorization: 'Bearer ' + token } })
+    fetch(getApiUrl('/api/notes/my'), { headers: { Authorization: 'Bearer ' + token } })
       .then(res => res.json())
       .then(data => setNotes(data.notes || []))
       .catch(console.error)

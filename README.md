@@ -122,6 +122,27 @@ From the root directory:
 
 ---
 
+---
+
+## ⚡ Triển khai lên Vercel (Vercel Deployment)
+
+Thư mục này đã được tối ưu sẵn 100% để deploy trực tiếp lên [Vercel](https://vercel.com):
+- Đã có file cấu hình `vercel.json` định tuyến SPA rewrites và đường dẫn output `client/dist`.
+- Lệnh build tự động cài đặt dependency của client và biên dịch Vite (`cd client && npm install && npm run build`).
+- Tích hợp chế độ lưu trữ cục bộ (Offline / LocalStorage fallback) giúp ứng dụng hoạt động ngay trên Vercel kể cả khi chưa cấu hình backend server.
+
+### Các bước Deploy lên Vercel:
+1. Đẩy code lên GitHub.
+2. Truy cập [Vercel Dashboard](https://vercel.com/new) -> **Import Git Repository**.
+3. Vercel sẽ tự động phát hiện cấu hình từ file `vercel.json`. Bấm **Deploy**.
+4. *(Tùy chọn - Kết nối Backend đầy đủ)*:
+   - Nếu bạn deploy backend lên [Render.com](https://render.com) hoặc [Railway.app](https://railway.app):
+   - Vào Vercel: **Settings** -> **Environment Variables** -> Thêm:
+     - Key: `VITE_BACKEND_URL`
+     - Value: `https://your-backend-service.onrender.com`
+   - Bấm **Redeploy** để frontend kết nối realtime đồng bộ đám mây và database SQLite.
+
+
 ## 📡 API Endpoints Summary
 
 | Method | Endpoint | Description |

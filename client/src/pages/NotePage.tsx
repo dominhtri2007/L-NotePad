@@ -12,6 +12,7 @@ import { AuthModal } from '../components/AuthModal';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { Lock, KeyRound, ShieldAlert } from 'lucide-react';
+import { getApiUrl, getSocketUrl } from '../config';
 
 export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; setIsDarkMode: (v: boolean) => void }) => {
   const { slug } = useParams();
@@ -50,7 +51,16 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
 
   useEffect(() => {
     if (!slug) return;
-    const socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
+
+    // Load cached note content immediately if available (offline/standalone support)
+    const localContent = localStorage.getItem('local_note_' + slug);
+    if (localContent !== null) {
+      setContent(localContent);
+      setHistory([localContent]);
+      setHistoryIndex(0);
+    }
+
+    const socket = io(getSocketUrl(), { transports: ['websocket', 'polling'] });
     socketRef.current = socket;
 
     socket.emit('join-note', {
@@ -66,6 +76,9 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
       setIsLocked(false);
       setHistory([data.content || '']);
       setHistoryIndex(0);
+      if (data.content) {
+        localStorage.setItem('local_note_' + slug, data.content);
+      }
     });
 
     socket.on('note-locked', () => {
@@ -91,6 +104,7 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
   const handleContentChange = (newVal) => {
     setContent(newVal);
     setIsSyncing(true);
+    localStorage.setItem('local_note_' + slug, newVal);
 
     if (!isHistoryAction.current) {
       const newHist = history.slice(0, historyIndex + 1);
@@ -144,7 +158,7 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
     e.preventDefault();
     setUnlockError(null);
     try {
-      const res = await fetch('/api/note/' + slug + '/verify', {
+      const res = await fetch(getApiUrl('/api/note/' + slug + '/verify'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: enteredPass }),

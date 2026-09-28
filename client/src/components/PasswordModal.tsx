@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Lock, Unlock, KeyRound, AlertCircle, CheckCircle } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
+import { getApiUrl } from '../config';
 
 export const PasswordModal = ({ isOpen, onClose, slug, hasPassword, onPasswordChanged }: {
   isOpen: boolean;
@@ -29,7 +30,7 @@ export const PasswordModal = ({ isOpen, onClose, slug, hasPassword, onPasswordCh
     setSubmitting(true);
     try {
       const token = localStorage.getItem('notepad_token');
-      const res = await fetch(`/api/note/${slug}/set-password`, {
+      const res = await fetch(getApiUrl(`/api/note/${slug}/set-password`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ password: newPassword, currentPassword }),
@@ -51,7 +52,7 @@ export const PasswordModal = ({ isOpen, onClose, slug, hasPassword, onPasswordCh
     setError(null);
     try {
       const token = localStorage.getItem('notepad_token');
-      const res = await fetch(`/api/note/${slug}/set-password`, {
+      const res = await fetch(getApiUrl(`/api/note/${slug}/set-password`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ password: '', currentPassword }),

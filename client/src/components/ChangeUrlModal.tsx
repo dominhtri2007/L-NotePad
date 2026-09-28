@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, Link2, AlertCircle, ArrowRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../context/LanguageContext';
+import { getApiUrl } from '../config';
 
 export const ChangeUrlModal = ({ isOpen, onClose, currentSlug, hasPassword }: {
   isOpen: boolean;
@@ -29,7 +30,7 @@ export const ChangeUrlModal = ({ isOpen, onClose, currentSlug, hasPassword }: {
     setSubmitting(true);
     try {
       const token = localStorage.getItem('notepad_token');
-      const res = await fetch(`/api/note/${currentSlug}/change-slug`, {
+      const res = await fetch(getApiUrl(`/api/note/${currentSlug}/change-slug`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify({ newSlug: clean, currentPassword })

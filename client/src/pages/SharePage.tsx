@@ -7,6 +7,7 @@ import { StatusBar } from '../components/StatusBar';
 import { Toolbar } from '../components/Toolbar';
 import { useLanguage } from '../context/LanguageContext';
 import { Eye, Edit3, ShieldAlert } from 'lucide-react';
+import { getSocketUrl } from '../config';
 
 export const SharePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; setIsDarkMode: (v: boolean) => void }) => {
   const { slug } = useParams();
@@ -20,7 +21,10 @@ export const SharePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; 
 
   useEffect(() => {
     if (!slug) return;
-    const socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
+    const localContent = localStorage.getItem('local_note_' + slug);
+    if (localContent) setContent(localContent);
+
+    const socket = io(getSocketUrl(), { transports: ['websocket', 'polling'] });
 
     socket.emit('join-note', { slug });
 

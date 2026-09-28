@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, RefreshCw, Lock, User, Mail, ShieldCheck, AlertCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
+import { getApiUrl } from '../config';
 
 export const AuthModal: React.FC<{ isOpen: boolean; onClose: () => void; initialTab?: 'login' | 'register' }> = ({ isOpen, onClose, initialTab = 'login' }) => {
   const { t } = useLanguage();
@@ -22,7 +23,7 @@ export const AuthModal: React.FC<{ isOpen: boolean; onClose: () => void; initial
   const loadCaptcha = async () => {
     setLoadingCaptcha(true);
     try {
-      const res = await fetch('/api/auth/captcha');
+      const res = await fetch(getApiUrl('/api/auth/captcha'));
       const data = await res.json();
       setCaptchaId(data.id);
       setCaptchaSvg(data.svg);
@@ -43,7 +44,7 @@ export const AuthModal: React.FC<{ isOpen: boolean; onClose: () => void; initial
         ? { username, password }
         : { username, password, email, captchaId, captchaAnswer: captchaInput };
 
-      const res = await fetch(endpoint, {
+      const res = await fetch(getApiUrl(endpoint), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
