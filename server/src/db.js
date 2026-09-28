@@ -1,15 +1,31 @@
 const fs = require('fs');
 const path = require('path');
+const { Pool } = require('pg');
 const { createClient } = require('@supabase/supabase-js');
 
-// Supabase Cloud Database setup
-const SUPABASE_URL = process.env.SUPABASE_URL;
+// 1. PostgreSQL Database setup (Direct connection string)
+const DEFAULT_PG_URL = 'postgresql://postgres.gzlklljypwetgafcdamz:ANx79WCy9ACrGWYH@aws-0-ap-south-1.pooler.supabase.com:5432/postgres';
+const PG_CONN_STRING = process.env.DATABASE_URL || DEFAULT_PG_URL;
+
+let pgPool = null;
+try {
+  pgPool = new Pool({
+    connectionString: PG_CONN_STRING,
+    ssl: { rejectUnauthorized: false }
+  });
+  console.log('[Database] Configured PostgreSQL direct pool.');
+} catch (e) {
+  console.warn('[Database] PostgreSQL pool init failed:', e.message);
+}
+
+// 2. Supabase Cloud REST/Realtime setup (Optional)
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://gzlklljypwetgafcdamz.supabase.co';
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
 let supabase = null;
 if (SUPABASE_URL && SUPABASE_KEY) {
   try {
     supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-    console.log('[Database] Connected to Supabase Cloud PostgreSQL:', SUPABASE_URL);
+    console.log('[Database] Connected to Supabase Cloud API:', SUPABASE_URL);
   } catch (err) {
     console.warn('[Database] Failed to init Supabase:', err.message);
   }
@@ -18,10 +34,46 @@ if (SUPABASE_URL && SUPABASE_KEY) {
 const memNotes = new Map();
 const memUsers = new Map();
 
+// Preload data from PostgreSQL
+if (pgPool) {
+  pgPool.query('SELECT * FROM notes').then((res) => {
+    for (const row of res.rows) {
+      memNotes.set(row.slug, {
+        slug: row.slug,
+        content: row.content || '',
+        password: row.password || null,
+        language: row.language || 'plaintext',
+        ownerId: row.owner_id || null,
+        createdAt: row.created_at || new Date().toISOString(),
+        updatedAt: row.updated_at || new Date().toISOString(),
+      });
+    }
+    console.log(`[PostgreSQL] Preloaded ${res.rows.length} notes from database.`);
+  }).catch((err) => {
+    console.warn('[PostgreSQL Notes Preload]:', err.message);
+  });
+
+  pgPool.query('SELECT * FROM users').then((res) => {
+    for (const row of res.rows) {
+      memUsers.set(row.id, {
+        id: row.id,
+        username: row.username,
+        email: row.email,
+        password: row.password,
+        createdAt: row.created_at || new Date().toISOString(),
+      });
+    }
+    console.log(`[PostgreSQL] Preloaded ${res.rows.length} users from database.`);
+  }).catch((err) => {
+    console.warn('[PostgreSQL Users Preload]:', err.message);
+  });
+}
+
 const DATA_DIR = path.join(__dirname, '../data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const DB_PATH = path.join(DATA_DIR, 'notepad.db');
+const Database = require('better-sqlite3');
 const sqlite = new Database(DB_PATH);
 sqlite.pragma('journal_mode = WAL');
 sqlite.pragma('synchronous = NORMAL');
@@ -47,41 +99,6 @@ sqlite.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_notes_owner ON notes(ownerId);
 `);
-
-// Preload from Supabase if configured
-if (supabase) {
-  supabase.from('notes').select('*').then(({ data, error }) => {
-    if (!error && data) {
-      for (const row of data) {
-        memNotes.set(row.slug, {
-          slug: row.slug,
-          content: row.content || '',
-          password: row.password || null,
-          language: row.language || 'plaintext',
-          ownerId: row.owner_id || null,
-          createdAt: row.created_at || new Date().toISOString(),
-          updatedAt: row.updated_at || new Date().toISOString(),
-        });
-      }
-      console.log(`[Supabase] Preloaded ${data.length} notes from cloud.`);
-    }
-  });
-
-  supabase.from('users').select('*').then(({ data, error }) => {
-    if (!error && data) {
-      for (const row of data) {
-        memUsers.set(row.id, {
-          id: row.id,
-          username: row.username,
-          email: row.email,
-          password: row.password,
-          createdAt: row.created_at || new Date().toISOString(),
-        });
-      }
-      console.log(`[Supabase] Preloaded ${data.length} users from cloud.`);
-    }
-  });
-}
 
 // Migration from legacy JSON if empty
 try {
@@ -179,6 +196,21 @@ const db = {
 
     memNotes.set(slug, note);
 
+    if (pgPool) {
+      pgPool.query(`
+        INSERT INTO notes (slug, content, password, language, owner_id, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (slug)
+        DO UPDATE SET
+          content = EXCLUDED.content,
+          password = EXCLUDED.password,
+          language = EXCLUDED.language,
+          owner_id = EXCLUDED.owner_id,
+          updated_at = EXCLUDED.updated_at
+      `, [note.slug, note.content, note.password, note.language, note.ownerId, note.updatedAt])
+      .catch(err => console.warn('[PostgreSQL Save Error]:', err.message));
+    }
+
     if (supabase) {
       supabase.from('notes').upsert({
         slug: note.slug,
@@ -206,6 +238,11 @@ const db = {
     memNotes.delete(oldSlug);
     memNotes.set(newSlug, updated);
 
+    if (pgPool) {
+      pgPool.query('UPDATE notes SET slug = $1, updated_at = $2 WHERE slug = $3', [newSlug, now, oldSlug])
+        .catch(err => console.warn('[PostgreSQL ChangeSlug Error]:', err.message));
+    }
+
     if (supabase) {
       supabase.from('notes').delete().eq('slug', oldSlug).then(() => {
         supabase.from('notes').upsert({
@@ -223,6 +260,10 @@ const db = {
   },
   deleteNote(slug) {
     memNotes.delete(slug);
+    if (pgPool) {
+      pgPool.query('DELETE FROM notes WHERE slug = $1', [slug])
+        .catch(err => console.warn('[PostgreSQL Delete Error]:', err.message));
+    }
     if (supabase) supabase.from('notes').delete().eq('slug', slug);
     return stmts.deleteNote.run(slug).changes > 0;
   },
@@ -246,6 +287,19 @@ const db = {
   createUser(user) {
     memUsers.set(user.id, user);
     try { stmts.insertUser.run(user); } catch (e) {}
+
+    if (pgPool) {
+      pgPool.query(`
+        INSERT INTO users (id, username, email, password, created_at)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (id) DO UPDATE SET
+          username = EXCLUDED.username,
+          email = EXCLUDED.email,
+          password = EXCLUDED.password
+      `, [user.id, user.username, user.email, user.password, user.createdAt])
+      .catch(err => console.warn('[PostgreSQL CreateUser Error]:', err.message));
+    }
+
     if (supabase) {
       supabase.from('users').upsert({
         id: user.id,
