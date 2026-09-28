@@ -8,6 +8,8 @@ import { Toolbar } from '../components/Toolbar';
 import { useLanguage } from '../context/LanguageContext';
 import { Eye, Edit3, ShieldAlert } from 'lucide-react';
 import { getSocketUrl } from '../config';
+import { supabase } from '../services/supabaseClient';
+import { supabaseNoteService } from '../services/supabaseNoteService';
 
 export const SharePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; setIsDarkMode: (v: boolean) => void }) => {
   const { slug } = useParams();
@@ -24,6 +26,49 @@ export const SharePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; 
     const localContent = localStorage.getItem('local_note_' + slug);
     if (localContent) setContent(localContent);
 
+    // Supabase Mode
+    if (supabaseNoteService.isAvailable()) {
+      supabaseNoteService.getNote(slug).then((note) => {
+        if (!note) return;
+        if (note.password) {
+          setLocked(true);
+          return;
+        }
+        setContent(note.content || '');
+        setLanguage(note.language || 'plaintext');
+      });
+
+      const channel = supabase!.channel(`note-room:${slug}`, {
+        config: { broadcast: { self: false } },
+      });
+
+      channel
+        .on('broadcast', { event: 'content-change' }, ({ payload }) => {
+          if (payload?.content !== undefined) setContent(payload.content);
+        })
+        .on('broadcast', { event: 'language-change' }, ({ payload }) => {
+          if (payload?.language) setLanguage(payload.language);
+        })
+        .on('broadcast', { event: 'typing' }, ({ payload }) => {
+          setTypingUser(payload?.username);
+          setTimeout(() => setTypingUser(null), 1500);
+        })
+        .on('presence', { event: 'sync' }, () => {
+          const presenceState = channel.presenceState();
+          setViewersCount(Math.max(1, Object.keys(presenceState).length));
+        })
+        .subscribe(async (status) => {
+          if (status === 'SUBSCRIBED') {
+            await channel.track({ online_at: Date.now() });
+          }
+        });
+
+      return () => {
+        channel.unsubscribe();
+      };
+    }
+
+    // Socket.IO Backend Mode
     const socket = io(getSocketUrl(), { transports: ['websocket', 'polling'] });
 
     socket.emit('join-note', { slug });

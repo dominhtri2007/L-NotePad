@@ -13,6 +13,8 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { Lock, KeyRound, ShieldAlert } from 'lucide-react';
 import { getApiUrl, getSocketUrl } from '../config';
+import { supabase } from '../services/supabaseClient';
+import { supabaseNoteService } from '../services/supabaseNoteService';
 
 export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; setIsDarkMode: (v: boolean) => void }) => {
   const { slug } = useParams();
@@ -42,6 +44,8 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
   const [historyIndex, setHistoryIndex] = useState(-1);
   const isHistoryAction = useRef(false);
   const socketRef = useRef(null);
+  const supabaseChannelRef = useRef<any>(null);
+  const saveDebounceRef = useRef<any>(null);
   const typingTimeoutRef = useRef(null);
 
   const showToast = (msg) => {
@@ -60,6 +64,64 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
       setHistoryIndex(0);
     }
 
+    // 1. Supabase Mode (Serverless on Vercel)
+    if (supabaseNoteService.isAvailable()) {
+      supabaseNoteService.getNote(slug).then((note) => {
+        if (!note) return;
+        if (note.password) {
+          setHasPassword(true);
+          const savedPass = localStorage.getItem('note_pass_' + slug) || '';
+          const isValid = supabaseNoteService.verifyPassword(savedPass, note.password);
+          if (!isValid) {
+            setIsLocked(true);
+            return;
+          }
+        }
+        setContent(note.content || '');
+        setLanguage(note.language || 'plaintext');
+        setHistory([note.content || '']);
+        setHistoryIndex(0);
+        localStorage.setItem('local_note_' + slug, note.content || '');
+      });
+
+      const channel = supabase!.channel(`note-room:${slug}`, {
+        config: { broadcast: { self: false } },
+      });
+      supabaseChannelRef.current = channel;
+
+      channel
+        .on('broadcast', { event: 'content-change' }, ({ payload }) => {
+          if (payload?.content !== undefined) setContent(payload.content);
+        })
+        .on('broadcast', { event: 'language-change' }, ({ payload }) => {
+          if (payload?.language) setLanguage(payload.language);
+        })
+        .on('broadcast', { event: 'typing' }, ({ payload }) => {
+          setTypingUser(payload?.username);
+          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+          typingTimeoutRef.current = setTimeout(() => setTypingUser(null), 1500);
+        })
+        .on('broadcast', { event: 'slug-changed' }, ({ payload }) => {
+          if (payload?.newSlug) navigate('/' + payload.newSlug);
+        })
+        .on('presence', { event: 'sync' }, () => {
+          const presenceState = channel.presenceState();
+          const count = Object.keys(presenceState).length;
+          setViewersCount(Math.max(1, count));
+        })
+        .subscribe(async (status) => {
+          if (status === 'SUBSCRIBED') {
+            await channel.track({ online_at: Date.now() });
+          }
+        });
+
+      return () => {
+        channel.unsubscribe();
+        if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+      };
+    }
+
+    // 2. Socket.IO / Local Backend Mode
     const socket = io(getSocketUrl(), { transports: ['websocket', 'polling'] });
     socketRef.current = socket;
 
@@ -115,6 +177,25 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
     }
     isHistoryAction.current = false;
 
+    // Supabase Realtime broadcast & auto-save
+    if (supabaseNoteService.isAvailable() && supabaseChannelRef.current) {
+      supabaseChannelRef.current.send({
+        type: 'broadcast',
+        event: 'content-change',
+        payload: { content: newVal },
+      });
+      supabaseChannelRef.current.send({
+        type: 'broadcast',
+        event: 'typing',
+        payload: { username: user ? user.username : 'Khách' },
+      });
+
+      if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+      saveDebounceRef.current = setTimeout(() => {
+        supabaseNoteService.saveNote(slug, { content: newVal, ownerId: user?.id });
+      }, 500);
+    }
+
     if (socketRef.current) {
       socketRef.current.emit('note-change', { slug, content: newVal, userId: user ? user.id : null });
       socketRef.current.emit('typing', { slug, username: user ? user.username : 'Khách' });
@@ -124,6 +205,14 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
 
   const handleLanguageChange = (newLang) => {
     setLanguage(newLang);
+    if (supabaseNoteService.isAvailable() && supabaseChannelRef.current) {
+      supabaseChannelRef.current.send({
+        type: 'broadcast',
+        event: 'language-change',
+        payload: { language: newLang },
+      });
+      supabaseNoteService.saveNote(slug, { language: newLang });
+    }
     if (socketRef.current) socketRef.current.emit('language-change', { slug, language: newLang });
   };
 
@@ -133,6 +222,11 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
       const prev = history[historyIndex - 1];
       setHistoryIndex(historyIndex - 1);
       setContent(prev);
+      localStorage.setItem('local_note_' + slug, prev);
+      if (supabaseNoteService.isAvailable() && supabaseChannelRef.current) {
+        supabaseChannelRef.current.send({ type: 'broadcast', event: 'content-change', payload: { content: prev } });
+        supabaseNoteService.saveNote(slug, { content: prev });
+      }
       if (socketRef.current) socketRef.current.emit('note-change', { slug, content: prev });
     }
   };
@@ -143,6 +237,11 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
       const next = history[historyIndex + 1];
       setHistoryIndex(historyIndex + 1);
       setContent(next);
+      localStorage.setItem('local_note_' + slug, next);
+      if (supabaseNoteService.isAvailable() && supabaseChannelRef.current) {
+        supabaseChannelRef.current.send({ type: 'broadcast', event: 'content-change', payload: { content: next } });
+        supabaseNoteService.saveNote(slug, { content: next });
+      }
       if (socketRef.current) socketRef.current.emit('note-change', { slug, content: next });
     }
   };
@@ -158,6 +257,19 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
     e.preventDefault();
     setUnlockError(null);
     try {
+      if (supabaseNoteService.isAvailable()) {
+        const note = await supabaseNoteService.getNote(slug);
+        if (note && note.password) {
+          const isValid = supabaseNoteService.verifyPassword(enteredPass, note.password);
+          if (!isValid) throw new Error('Mật khẩu không đúng');
+          localStorage.setItem('note_pass_' + slug, enteredPass);
+          setContent(note.content || '');
+          setLanguage(note.language || 'plaintext');
+          setIsLocked(false);
+          return;
+        }
+      }
+
       const res = await fetch(getApiUrl('/api/note/' + slug + '/verify'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -173,7 +285,7 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
       if (socketRef.current) {
         socketRef.current.emit('join-note', { slug, password: enteredPass, userToken: token });
       }
-    } catch (err) {
+    } catch (err: any) {
       setUnlockError(err.message);
     }
   };

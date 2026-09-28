@@ -142,6 +142,33 @@ Thư mục này đã được tối ưu sẵn 100% để deploy trực tiếp l�
      - Value: `https://your-backend-service.onrender.com`
    - Bấm **Redeploy** để frontend kết nối realtime đồng bộ đám mây và database SQLite.
 
+---
+
+## ⚡ Cấu hình Database Supabase (Khuyên dùng cho Vercel)
+
+Dự án đã tích hợp trực tiếp **Supabase Cloud PostgreSQL** và **Supabase Realtime**, giúp ứng dụng hoạt động 100% Serverless trên Vercel mà **KHÔNG CẦN** bất kỳ server backend nào!
+
+### Bước 1: Tạo Database trên Supabase
+1. Đăng ký/Đăng nhập tại [https://supabase.com](https://supabase.com).
+2. Tạo một Project mới (chọn Region Singapore hoặc gần bạn nhất).
+3. Vào mục **SQL Editor** (biểu tượng `>_` ở thanh menu bên trái).
+4. Mở file `supabase_schema.sql` có sẵn trong thư mục dự án, copy toàn bộ nội dung và dán vào SQL Editor -> Bấm **Run** để khởi tạo bảng và bật Realtime sync.
+
+### Bước 2: Lấy API Keys của Supabase
+1. Vào **Project Settings** (biểu tượng bánh răng ở góc dưới bên trái) -> Chọn **API**.
+2. Copy 2 thông tin:
+   - **Project URL** (ví dụ: `https://xyzcompany.supabase.co`)
+   - **Project API Keys** -> `anon` / `public` key
+
+### Bước 3: Cấu hình biến môi trường trên Vercel
+1. Vào trang dự án trên [Vercel Dashboard](https://vercel.com) -> **Settings** -> **Environment Variables**.
+2. Thêm 2 biến sau:
+   - `VITE_SUPABASE_URL`: dán Project URL của bạn.
+   - `VITE_SUPABASE_ANON_KEY`: dán anon public key của bạn.
+3. Bấm **Redeploy** trên Vercel.
+
+🎉 **Xong!** Ứng dụng của bạn trên Vercel giờ đây lưu trữ dữ liệu vĩnh viễn trên Supabase Cloud và đồng bộ real-time nhiều người cùng lúc cực nhanh thông qua Supabase Realtime Channels!
+
 
 ## 📡 API Endpoints Summary
 

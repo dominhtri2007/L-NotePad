@@ -6,24 +6,45 @@ import { useLanguage } from '../context/LanguageContext';
 import { BookOpen, Lock, ArrowRight, Copy, Check, Plus, Search } from 'lucide-react';
 import { generateRandomSlug } from '../utils/slug';
 import { getApiUrl } from '../config';
+import { supabaseNoteService } from '../services/supabaseNoteService';
 
 export const MyNotesPage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; setIsDarkMode: (v: boolean) => void }) => {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const { t } = useLanguage();
   const navigate = useNavigate();
-  const [notes, setNotes] = useState([]);
+  const [notes, setNotes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [copiedSlug, setCopiedSlug] = useState(null);
+  const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!token) { navigate('/'); return; }
+    if (!token && !user) { navigate('/'); return; }
+
+    if (supabaseNoteService.isAvailable() && user?.id) {
+      supabaseNoteService.getUserNotes(user.id)
+        .then((data) => {
+          const mapped = data.map(n => ({
+            slug: n.slug,
+            preview: (n.content || '').slice(0, 100),
+            chars: (n.content || '').length,
+            words: (n.content || '').trim().split(/\s+/).filter(Boolean).length,
+            hasPassword: Boolean(n.password),
+            language: n.language,
+            updatedAt: n.updated_at,
+          }));
+          setNotes(mapped);
+        })
+        .catch(console.error)
+        .finally(() => setLoading(false));
+      return;
+    }
+
     fetch(getApiUrl('/api/notes/my'), { headers: { Authorization: 'Bearer ' + token } })
       .then(res => res.json())
       .then(data => setNotes(data.notes || []))
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [token, navigate]);
+  }, [token, user, navigate]);
 
   const copyLink = (s) => {
     navigator.clipboard.writeText(window.location.origin + '/' + s);

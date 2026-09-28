@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, Lock, Unlock, KeyRound, AlertCircle, CheckCircle } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 import { getApiUrl } from '../config';
+import { supabaseNoteService } from '../services/supabaseNoteService';
 
 export const PasswordModal = ({ isOpen, onClose, slug, hasPassword, onPasswordChanged }: {
   isOpen: boolean;
@@ -29,6 +30,22 @@ export const PasswordModal = ({ isOpen, onClose, slug, hasPassword, onPasswordCh
     }
     setSubmitting(true);
     try {
+      if (supabaseNoteService.isAvailable()) {
+        const note = await supabaseNoteService.getNote(slug);
+        if (note && note.password) {
+          const isValid = supabaseNoteService.verifyPassword(currentPassword || '', note.password);
+          if (!isValid) throw new Error('Mật khẩu hiện tại không đúng');
+        }
+        const hashed = supabaseNoteService.hashPassword(newPassword);
+        const ok = await supabaseNoteService.saveNote(slug, { password: hashed });
+        if (!ok) throw new Error('Không thể lưu mật khẩu vào Supabase');
+        localStorage.setItem('note_pass_' + slug, newPassword);
+        setSuccess('Cập nhật mật khẩu thành công!');
+        onPasswordChanged(true);
+        setTimeout(() => { onClose(); setSuccess(null); }, 1000);
+        return;
+      }
+
       const token = localStorage.getItem('notepad_token');
       const res = await fetch(getApiUrl(`/api/note/${slug}/set-password`), {
         method: 'POST',
@@ -51,6 +68,21 @@ export const PasswordModal = ({ isOpen, onClose, slug, hasPassword, onPasswordCh
     setSubmitting(true);
     setError(null);
     try {
+      if (supabaseNoteService.isAvailable()) {
+        const note = await supabaseNoteService.getNote(slug);
+        if (note && note.password) {
+          const isValid = supabaseNoteService.verifyPassword(currentPassword || '', note.password);
+          if (!isValid) throw new Error('Mật khẩu hiện tại không đúng');
+        }
+        const ok = await supabaseNoteService.saveNote(slug, { password: null });
+        if (!ok) throw new Error('Không thể gỡ mật khẩu');
+        localStorage.removeItem('note_pass_' + slug);
+        setSuccess(t.passwordModal.successRemoved);
+        onPasswordChanged(false);
+        setTimeout(() => { onClose(); setSuccess(null); }, 1000);
+        return;
+      }
+
       const token = localStorage.getItem('notepad_token');
       const res = await fetch(getApiUrl(`/api/note/${slug}/set-password`), {
         method: 'POST',

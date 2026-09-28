@@ -3,6 +3,7 @@ import { X, Link2, AlertCircle, ArrowRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../context/LanguageContext';
 import { getApiUrl } from '../config';
+import { supabaseNoteService } from '../services/supabaseNoteService';
 
 export const ChangeUrlModal = ({ isOpen, onClose, currentSlug, hasPassword }: {
   isOpen: boolean;
@@ -29,6 +30,19 @@ export const ChangeUrlModal = ({ isOpen, onClose, currentSlug, hasPassword }: {
 
     setSubmitting(true);
     try {
+      if (supabaseNoteService.isAvailable()) {
+        const note = await supabaseNoteService.getNote(currentSlug);
+        if (note && note.password) {
+          const isValid = supabaseNoteService.verifyPassword(currentPassword || '', note.password);
+          if (!isValid) throw new Error('Mật khẩu hiện tại không đúng');
+        }
+        const res = await supabaseNoteService.changeSlug(currentSlug, clean);
+        if (!res.success) throw new Error(res.error || 'Failed');
+        onClose();
+        navigate(`/${clean}`);
+        return;
+      }
+
       const token = localStorage.getItem('notepad_token');
       const res = await fetch(getApiUrl(`/api/note/${currentSlug}/change-slug`), {
         method: 'POST',
