@@ -109,17 +109,28 @@ router.post('/login', async (req, res) => {
 });
 
 // 4. Me
-router.get('/me', (req, res) => {
-  if (!req.user) {
-    return res.status(401).json({ error: 'Chưa đăng nhập' });
+router.get('/me', async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Chưa đăng nhập' });
+    }
+    let user = await db.findUserById(req.user.id);
+    if (!user) {
+      // Fallback to token payload if user is not found in database cache yet
+      user = req.user;
+    }
+    res.json({
+      user: { id: user.id, username: user.username, email: user.email },
+    });
+  } catch (err) {
+    console.error('Me endpoint error:', err);
+    if (req.user) {
+      return res.json({
+        user: { id: req.user.id, username: req.user.username, email: req.user.email },
+      });
+    }
+    res.status(500).json({ error: 'Lỗi server' });
   }
-  const user = db.findUserById(req.user.id);
-  if (!user) {
-    return res.status(404).json({ error: 'Người dùng không tồn tại' });
-  }
-  res.json({
-    user: { id: user.id, username: user.username, email: user.email },
-  });
 });
 
 module.exports = router;

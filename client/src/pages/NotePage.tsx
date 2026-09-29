@@ -246,7 +246,7 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
       supabaseChannelRef.current.send({
         type: 'broadcast',
         event: 'typing',
-        payload: { username: user ? user.username : 'Khách' },
+        payload: { username: (user && user.username) ? user.username : 'Khách' },
       });
     }
 
@@ -273,7 +273,7 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
 
     if (socketRef.current) {
       socketRef.current.emit('note-change', { slug, content: newVal, userId: user ? user.id : null });
-      socketRef.current.emit('typing', { slug, username: user ? user.username : 'Khách' });
+      socketRef.current.emit('typing', { slug, username: (user && user.username) ? user.username : 'Khách' });
     }
   };
 
