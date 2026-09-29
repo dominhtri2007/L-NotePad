@@ -44,6 +44,10 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
   const isHistoryAction = useRef(false);
   const socketRef = useRef<any>(null);
   const supabaseChannelRef = useRef<any>(null);
+  const bcRef = useRef<BroadcastChannel | null>(null);
+  const lastLocalTypeRef = useRef<number>(0);
+  const lastPollUpdatedAtRef = useRef<string>('');
+  const latestContentRef = useRef<string>('');
   const saveDebounceRef = useRef<any>(null);
   const typingTimeoutRef = useRef<any>(null);
   // Keep latest token in a ref so handlers always use fresh value
@@ -100,9 +104,33 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
   useEffect(() => {
     if (!slug) return;
 
+    // 0. Zero-latency cross-tab realtime sync via BroadcastChannel
+    try {
+      const bc = new BroadcastChannel(`note_channel_${slug}`);
+      bcRef.current = bc;
+      bc.onmessage = (e) => {
+        if (e.data?.type === 'content-change' && e.data?.content !== undefined) {
+          if (e.data.content !== latestContentRef.current) {
+            latestContentRef.current = e.data.content;
+            setContent(e.data.content);
+            localStorage.setItem('local_note_' + slug, e.data.content);
+          }
+        }
+        if (e.data?.type === 'language-change' && e.data?.language) {
+          setLanguage(e.data.language);
+        }
+        if (e.data?.type === 'typing') {
+          setTypingUser(e.data.username);
+          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+          typingTimeoutRef.current = setTimeout(() => setTypingUser(null), 1500);
+        }
+      };
+    } catch (_) {}
+
     // 1. Load cached note content immediately if available for zero-latency load
     const localContent = localStorage.getItem('local_note_' + slug);
     if (localContent !== null) {
+      latestContentRef.current = localContent;
       setContent(localContent);
       setHistory([localContent]);
       setHistoryIndex(0);
@@ -126,7 +154,9 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
         }
         setIsLocked(false);
         setHasPassword(Boolean(data.hasPassword));
+        if (data.updatedAt) lastPollUpdatedAtRef.current = data.updatedAt;
         if (data.content !== undefined) {
+          latestContentRef.current = data.content;
           setContent(data.content);
           setHistory([data.content]);
           setHistoryIndex(0);
@@ -138,7 +168,34 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
         console.warn('Could not fetch note from backend:', err);
       });
 
-    // 3. Supabase Realtime channel (if supabase url/key configured)
+    // 3. High-performance Polling fallback for multi-device realtime sync
+    const pollInterval = setInterval(() => {
+      if (Date.now() - lastLocalTypeRef.current < 1200) return;
+
+      const currentPass = localStorage.getItem('note_pass_' + slug) || '';
+      fetch(getApiUrl(`/api/note/${slug}`), {
+        headers: {
+          'x-note-password': currentPass,
+          ...(tokenRef.current ? { Authorization: 'Bearer ' + tokenRef.current } : {}),
+        },
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (!data || data.locked) return;
+          if (data.updatedAt && data.updatedAt !== lastPollUpdatedAtRef.current) {
+            lastPollUpdatedAtRef.current = data.updatedAt;
+            if (data.content !== undefined && data.content !== latestContentRef.current) {
+              latestContentRef.current = data.content;
+              setContent(data.content);
+              localStorage.setItem('local_note_' + slug, data.content);
+            }
+            if (data.language) setLanguage(data.language);
+          }
+        })
+        .catch(() => {});
+    }, 1200);
+
+    // 4. Supabase Realtime channel (if supabase url/key configured)
     const client = getSupabase();
     if (client) {
       const channel = client.channel(`note-room:${slug}`, {
@@ -215,6 +272,11 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
     } catch (_) {}
 
     return () => {
+      if (bcRef.current) {
+        bcRef.current.close();
+        bcRef.current = null;
+      }
+      clearInterval(pollInterval);
       if (socketRef.current) socketRef.current.disconnect();
       if (supabaseChannelRef.current) supabaseChannelRef.current.unsubscribe();
       if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
@@ -223,6 +285,8 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
 
 
   const handleContentChange = (newVal: string) => {
+    lastLocalTypeRef.current = Date.now();
+    latestContentRef.current = newVal;
     setContent(newVal);
     setIsSyncing(true);
     localStorage.setItem('local_note_' + slug, newVal);
@@ -235,6 +299,18 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
       setHistoryIndex(newHist.length - 1);
     }
     isHistoryAction.current = false;
+
+    // Cross-tab broadcast via BroadcastChannel
+    if (bcRef.current) {
+      bcRef.current.postMessage({
+        type: 'content-change',
+        content: newVal,
+      });
+      bcRef.current.postMessage({
+        type: 'typing',
+        username: (user && user.username) ? user.username : 'Khách',
+      });
+    }
 
     // Realtime broadcast via Supabase
     if (supabaseChannelRef.current) {
@@ -255,7 +331,7 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
     saveDebounceRef.current = setTimeout(async () => {
       try {
         const savedPass = localStorage.getItem('note_pass_' + slug) || '';
-        await fetch(getApiUrl(`/api/note/${slug}`), {
+        const res = await fetch(getApiUrl(`/api/note/${slug}`), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -264,6 +340,12 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
           },
           body: JSON.stringify({ content: newVal, language }),
         });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.note?.updatedAt) {
+            lastPollUpdatedAtRef.current = data.note.updatedAt;
+          }
+        }
       } catch (err) {
         console.warn('Auto-save error:', err);
       } finally {
@@ -279,6 +361,12 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
 
   const handleLanguageChange = (newLang: string) => {
     setLanguage(newLang);
+    if (bcRef.current) {
+      bcRef.current.postMessage({
+        type: 'language-change',
+        language: newLang,
+      });
+    }
     if (supabaseChannelRef.current) {
       supabaseChannelRef.current.send({
         type: 'broadcast',

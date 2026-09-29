@@ -104,8 +104,6 @@ function mapRowToNote(row) {
 
 const db = {
   async getNote(slug) {
-    if (memNotes.has(slug)) return memNotes.get(slug);
-
     try {
       const res = await executeQuery('SELECT * FROM notes WHERE slug = $1', [slug]);
       if (res.rows.length > 0) {
@@ -116,6 +114,8 @@ const db = {
     } catch (err) {
       console.warn('[PostgreSQL getNote]:', err.message);
     }
+
+    if (memNotes.has(slug)) return memNotes.get(slug);
 
     if (stmts && stmts.getNote) {
       try {

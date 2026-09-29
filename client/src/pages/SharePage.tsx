@@ -6,7 +6,7 @@ import { Editor } from '../components/Editor';
 import { StatusBar } from '../components/StatusBar';
 import { Toolbar } from '../components/Toolbar';
 import { useLanguage } from '../context/LanguageContext';
-import { Eye, Edit3, ShieldAlert } from 'lucide-react';
+import { ShieldAlert } from 'lucide-react';
 import { getApiUrl, getSocketUrl } from '../config';
 import { getSupabase } from '../services/supabaseClient';
 
@@ -25,7 +25,26 @@ export const SharePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; 
     const localContent = localStorage.getItem('local_note_' + slug);
     if (localContent) setContent(localContent);
 
-    // Fetch from backend API
+    // 0. Zero-latency cross-tab realtime sync via BroadcastChannel
+    let bc: BroadcastChannel | null = null;
+    try {
+      bc = new BroadcastChannel(`note_channel_${slug}`);
+      bc.onmessage = (e) => {
+        if (e.data?.type === 'content-change' && e.data?.content !== undefined) {
+          setContent(e.data.content);
+        }
+        if (e.data?.type === 'language-change' && e.data?.language) {
+          setLanguage(e.data.language);
+        }
+        if (e.data?.type === 'typing') {
+          setTypingUser(e.data.username);
+          setTimeout(() => setTypingUser(null), 1500);
+        }
+      };
+    } catch (_) {}
+
+    // 1. Initial fetch from backend API
+    let lastUpdatedAt = '';
     fetch(getApiUrl(`/api/note/${slug}`))
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
@@ -35,10 +54,26 @@ export const SharePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; 
           return;
         }
         setLocked(false);
+        if (data.updatedAt) lastUpdatedAt = data.updatedAt;
         if (data.content !== undefined) setContent(data.content);
         if (data.language) setLanguage(data.language);
       })
       .catch(console.warn);
+
+    // 2. High-performance Polling fallback for multi-device realtime updates
+    const pollInterval = setInterval(() => {
+      fetch(getApiUrl(`/api/note/${slug}`))
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (!data || data.locked) return;
+          if (data.updatedAt && data.updatedAt !== lastUpdatedAt) {
+            lastUpdatedAt = data.updatedAt;
+            if (data.content !== undefined) setContent(data.content);
+            if (data.language) setLanguage(data.language);
+          }
+        })
+        .catch(() => {});
+    }, 1200);
 
     // Realtime via Supabase if configured
     const client = getSupabase();
@@ -102,6 +137,8 @@ export const SharePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; 
     });
 
     return () => {
+      if (bc) bc.close();
+      clearInterval(pollInterval);
       if (channel) channel.unsubscribe();
       socket.disconnect();
     };
@@ -117,23 +154,6 @@ export const SharePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; 
         onOpenAuth={() => {}}
         onOpenPassword={() => {}}
       />
-
-      {/* Read-only Banner */}
-      <div className="bg-purple-50 dark:bg-purple-950/40 border-b border-purple-200 dark:border-purple-900/60 px-4 py-2 flex items-center justify-between text-xs text-purple-800 dark:text-purple-300">
-        <div className="flex items-center gap-2">
-          <Eye className="w-4 h-4 text-purple-600 dark:text-purple-400" />
-          <span>
-            <strong>{t.sharePage.bannerTitle}</strong> {t.sharePage.bannerDesc}
-          </span>
-        </div>
-        <Link
-          to={`/${slug}`}
-          className="flex items-center gap-1.5 px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded-md font-medium text-xs transition-all active:scale-95 shadow-sm"
-        >
-          <Edit3 className="w-3.5 h-3.5" />
-          <span>{t.sharePage.editBtn}</span>
-        </Link>
-      </div>
 
       <Toolbar
         slug={slug || ''}
