@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { User } from '../types';
 import { getApiUrl } from '../config';
 
@@ -17,6 +17,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(() => localStorage.getItem('notepad_token'));
   const [loading, setLoading] = useState(true);
+  // Track whether the current token was set via login() so we skip re-fetching /me
+  const skipNextFetchRef = useRef(false);
 
   const fetchCurrentUser = async (authToken: string) => {
     try {
@@ -29,7 +31,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const data = await res.json();
         setUser(data.user);
       } else {
-        // Token invalid
+        // Token invalid – clear it
         localStorage.removeItem('notepad_token');
         setToken(null);
         setUser(null);
@@ -42,6 +44,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
+    // If login() already supplied the user object, skip redundant /me fetch
+    if (skipNextFetchRef.current) {
+      skipNextFetchRef.current = false;
+      setLoading(false);
+      return;
+    }
     if (token) {
       fetchCurrentUser(token);
     } else {
@@ -51,6 +59,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const login = (newToken: string, newUser: User) => {
     localStorage.setItem('notepad_token', newToken);
+    // Mark that user object is already known – no need to hit /me again
+    skipNextFetchRef.current = true;
     setToken(newToken);
     setUser(newUser);
   };

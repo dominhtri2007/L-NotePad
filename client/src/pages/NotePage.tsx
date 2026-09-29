@@ -49,7 +49,48 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
   // Keep latest token in a ref so handlers always use fresh value
   // without causing the main useEffect to re-run on login
   const tokenRef = useRef<string | null>(token);
+  const prevTokenRef = useRef<string | null>(token);
   useEffect(() => { tokenRef.current = token; }, [token]);
+
+  // When user logs in (token goes from null → value), re-fetch the note
+  // so that previously-locked / private notes become accessible.
+  // We do NOT reset content first to avoid the white-flash.
+  useEffect(() => {
+    const wasNull = prevTokenRef.current === null;
+    const isNowSet = token !== null;
+    prevTokenRef.current = token;
+
+    if (!wasNull || !isNowSet || !slug) return; // only react to null → token transition
+
+    const savedPass = localStorage.getItem('note_pass_' + slug) || '';
+    fetch(getApiUrl(`/api/note/${slug}`), {
+      headers: {
+        'x-note-password': savedPass,
+        Authorization: 'Bearer ' + token,
+      },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return;
+        if (data.locked) {
+          setIsLocked(true);
+          setHasPassword(true);
+          return;
+        }
+        setIsLocked(false);
+        setHasPassword(Boolean(data.hasPassword));
+        if (data.content !== undefined) {
+          setContent(data.content);
+          setHistory([data.content]);
+          setHistoryIndex(0);
+          localStorage.setItem('local_note_' + slug, data.content);
+        }
+        if (data.language) setLanguage(data.language);
+      })
+      .catch((err) => {
+        console.warn('Re-fetch after login failed:', err);
+      });
+  }, [token, slug]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
