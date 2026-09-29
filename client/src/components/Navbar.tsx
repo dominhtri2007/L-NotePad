@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, Users, Lock, Moon, Sun, User as UserIcon, LogOut, BookOpen, Plus, Languages, Check, Database } from 'lucide-react';
+import { FileText, Users, Lock, Moon, Sun, User as UserIcon, LogOut, BookOpen, Plus, Languages, Check } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage, AVAILABLE_LANGUAGES } from '../context/LanguageContext';
 import { generateRandomSlug } from '../utils/slug';
@@ -12,9 +12,7 @@ export const Navbar = ({
   isDarkMode = false,
   setIsDarkMode = () => {},
   onOpenAuth = () => {},
-  onOpenPassword = () => {},
-  onOpenSupabaseConfig = () => {},
-  isSupabaseConnected = true,
+  onOpenPassword = () => {}
 }: {
   slug?: string;
   viewersCount?: number;
@@ -23,8 +21,6 @@ export const Navbar = ({
   setIsDarkMode?: (val: boolean) => void;
   onOpenAuth?: () => void;
   onOpenPassword?: () => void;
-  onOpenSupabaseConfig?: () => void;
-  isSupabaseConnected?: boolean;
 }) => {
   const { user, logout } = useAuth();
   const { language, setLanguage, t } = useLanguage();
@@ -33,6 +29,7 @@ export const Navbar = ({
   const langRef = useRef<HTMLDivElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const newSlug = generateRandomSlug();
+
 
 
   useEffect(() => {
@@ -83,22 +80,6 @@ export const Navbar = ({
         <Link to={`/${newSlug}`} className='flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg transition-colors'>
           <Plus className='w-4 h-4'/><span className='hidden md:inline'>{t.nav.newNote}</span>
         </Link>
-
-        {/* Supabase status / config button */}
-        <button
-          onClick={onOpenSupabaseConfig}
-          className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border transition-all ${
-            isSupabaseConnected
-              ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100'
-              : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700 hover:bg-amber-100 animate-pulse'
-          }`}
-          title={isSupabaseConnected ? 'Đã kết nối Supabase Cloud. Bấm để xem cấu hình.' : 'Chưa kết nối Supabase Cloud. Bấm để kết nối ngay.'}
-        >
-          <Database className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">{isSupabaseConnected ? 'Supabase DB' : 'Kết nối DB'}</span>
-          <span className={`w-1.5 h-1.5 rounded-full ${isSupabaseConnected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-        </button>
-
 
         {/* Language selector dropdown */}
         <div className='relative' ref={langRef}>

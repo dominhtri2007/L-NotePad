@@ -13,9 +13,7 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { Lock, KeyRound, ShieldAlert } from 'lucide-react';
 import { getApiUrl, getSocketUrl } from '../config';
-import { supabase, getSupabase, isSupabaseConfigured } from '../services/supabaseClient';
-import { supabaseNoteService } from '../services/supabaseNoteService';
-import { SupabaseConfigModal } from '../components/SupabaseConfigModal';
+import { getSupabase } from '../services/supabaseClient';
 
 export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; setIsDarkMode: (v: boolean) => void }) => {
   const { slug } = useParams();
@@ -29,52 +27,35 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
   const [hasPassword, setHasPassword] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
   const [enteredPass, setEnteredPass] = useState('');
-  const [unlockError, setUnlockError] = useState(null);
+  const [unlockError, setUnlockError] = useState<string | null>(null);
 
   const [viewersCount, setViewersCount] = useState(1);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [typingUser, setTypingUser] = useState(null);
-
-  const [supabaseConnected, setSupabaseConnected] = useState(() => isSupabaseConfigured());
-  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error' | 'local_only'>(() =>
-    isSupabaseConfigured() ? 'saved' : 'local_only'
-  );
-  const [showSupabaseModal, setShowSupabaseModal] = useState(false);
+  const [typingUser, setTypingUser] = useState<string | null>(null);
 
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [showChangeUrlModal, setShowChangeUrlModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [toastMessage, setToastMessage] = useState(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-
-  const [history, setHistory] = useState([]);
+  const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const isHistoryAction = useRef(false);
-  const socketRef = useRef(null);
+  const socketRef = useRef<any>(null);
   const supabaseChannelRef = useRef<any>(null);
   const saveDebounceRef = useRef<any>(null);
-  const typingTimeoutRef = useRef(null);
+  const typingTimeoutRef = useRef<any>(null);
 
-  const showToast = (msg) => {
+  const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
   };
 
   useEffect(() => {
-    const handleConfigChange = () => {
-      const ready = isSupabaseConfigured();
-      setSupabaseConnected(ready);
-      setSaveStatus(ready ? 'saved' : 'local_only');
-    };
-    window.addEventListener('supabase-config-changed', handleConfigChange);
-    return () => window.removeEventListener('supabase-config-changed', handleConfigChange);
-  }, []);
-
-  useEffect(() => {
     if (!slug) return;
 
-    // Load cached note content immediately if available (offline/standalone support)
+    // 1. Load cached note content immediately if available for zero-latency load
     const localContent = localStorage.getItem('local_note_' + slug);
     if (localContent !== null) {
       setContent(localContent);
@@ -82,110 +63,121 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
       setHistoryIndex(0);
     }
 
-    // 1. Supabase Mode (Serverless on Vercel)
-    if (supabaseNoteService.isAvailable()) {
-      supabaseNoteService.getNote(slug).then((note) => {
-        if (!note) return;
-        if (note.password) {
+    // 2. Fetch note from backend / PostgreSQL
+    const savedPass = localStorage.getItem('note_pass_' + slug) || '';
+    fetch(getApiUrl(`/api/note/${slug}`), {
+      headers: {
+        'x-note-password': savedPass,
+        ...(token ? { Authorization: 'Bearer ' + token } : {}),
+      },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return;
+        if (data.locked) {
+          setIsLocked(true);
           setHasPassword(true);
-          const savedPass = localStorage.getItem('note_pass_' + slug) || '';
-          const isValid = supabaseNoteService.verifyPassword(savedPass, note.password);
-          if (!isValid) {
-            setIsLocked(true);
-            return;
-          }
+          return;
         }
-        setContent(note.content || '');
-        setLanguage(note.language || 'plaintext');
-        setHistory([note.content || '']);
-        setHistoryIndex(0);
-        localStorage.setItem('local_note_' + slug, note.content || '');
+        setIsLocked(false);
+        setHasPassword(Boolean(data.hasPassword));
+        if (data.content !== undefined) {
+          setContent(data.content);
+          setHistory([data.content]);
+          setHistoryIndex(0);
+          localStorage.setItem('local_note_' + slug, data.content);
+        }
+        if (data.language) setLanguage(data.language);
+      })
+      .catch((err) => {
+        console.warn('Could not fetch note from backend:', err);
       });
 
-      const client = getSupabase();
-      if (client) {
-        const channel = client.channel(`note-room:${slug}`, {
-          config: { broadcast: { self: false } },
+    // 3. Supabase Realtime channel (if supabase url/key configured)
+    const client = getSupabase();
+    if (client) {
+      const channel = client.channel(`note-room:${slug}`, {
+        config: { broadcast: { self: false } },
+      });
+      supabaseChannelRef.current = channel;
+
+      channel
+        .on('broadcast', { event: 'content-change' }, ({ payload }) => {
+          if (payload?.content !== undefined) setContent(payload.content);
+        })
+        .on('broadcast', { event: 'language-change' }, ({ payload }) => {
+          if (payload?.language) setLanguage(payload.language);
+        })
+        .on('broadcast', { event: 'typing' }, ({ payload }) => {
+          setTypingUser(payload?.username);
+          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+          typingTimeoutRef.current = setTimeout(() => setTypingUser(null), 1500);
+        })
+        .on('broadcast', { event: 'slug-changed' }, ({ payload }) => {
+          if (payload?.newSlug) navigate('/' + payload.newSlug);
+        })
+        .on('presence', { event: 'sync' }, () => {
+          const presenceState = channel.presenceState();
+          const count = Object.keys(presenceState).length;
+          setViewersCount(Math.max(1, count));
+        })
+        .subscribe(async (status) => {
+          if (status === 'SUBSCRIBED') {
+            await channel.track({ online_at: Date.now() });
+          }
         });
-        supabaseChannelRef.current = channel;
-
-        channel
-          .on('broadcast', { event: 'content-change' }, ({ payload }) => {
-            if (payload?.content !== undefined) setContent(payload.content);
-          })
-          .on('broadcast', { event: 'language-change' }, ({ payload }) => {
-            if (payload?.language) setLanguage(payload.language);
-          })
-          .on('broadcast', { event: 'typing' }, ({ payload }) => {
-            setTypingUser(payload?.username);
-            if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-            typingTimeoutRef.current = setTimeout(() => setTypingUser(null), 1500);
-          })
-          .on('broadcast', { event: 'slug-changed' }, ({ payload }) => {
-            if (payload?.newSlug) navigate('/' + payload.newSlug);
-          })
-          .on('presence', { event: 'sync' }, () => {
-            const presenceState = channel.presenceState();
-            const count = Object.keys(presenceState).length;
-            setViewersCount(Math.max(1, count));
-          })
-          .subscribe(async (status) => {
-            if (status === 'SUBSCRIBED') {
-              await channel.track({ online_at: Date.now() });
-            }
-          });
-
-        return () => {
-          channel.unsubscribe();
-          if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
-        };
-      }
     }
 
-    // 2. Socket.IO / Local Backend Mode
-    const socket = io(getSocketUrl(), { transports: ['websocket', 'polling'] });
-    socketRef.current = socket;
+    // 4. Socket.IO connection (if standalone server is running)
+    try {
+      const socket = io(getSocketUrl(), { transports: ['websocket', 'polling'], timeout: 3000 });
+      socketRef.current = socket;
 
-    socket.emit('join-note', {
-      slug,
-      password: localStorage.getItem('note_pass_' + slug) || '',
-      userToken: token,
-    });
+      socket.emit('join-note', {
+        slug,
+        password: savedPass,
+        userToken: token,
+      });
 
-    socket.on('init-note', (data) => {
-      setContent(data.content || '');
-      setLanguage(data.language || 'plaintext');
-      setHasPassword(data.hasPassword || false);
-      setIsLocked(false);
-      setHistory([data.content || '']);
-      setHistoryIndex(0);
-      if (data.content) {
-        localStorage.setItem('local_note_' + slug, data.content);
-      }
-    });
+      socket.on('init-note', (data) => {
+        setContent(data.content || '');
+        setLanguage(data.language || 'plaintext');
+        setHasPassword(data.hasPassword || false);
+        setIsLocked(false);
+        setHistory([data.content || '']);
+        setHistoryIndex(0);
+        if (data.content) {
+          localStorage.setItem('local_note_' + slug, data.content);
+        }
+      });
 
-    socket.on('note-locked', () => {
-      setIsLocked(true);
-      setHasPassword(true);
-    });
+      socket.on('note-locked', () => {
+        setIsLocked(true);
+        setHasPassword(true);
+      });
 
-    socket.on('note-updated', ({ content: newContent }) => setContent(newContent));
-    socket.on('language-updated', ({ language: newLang }) => setLanguage(newLang));
-    socket.on('viewers-count', (count) => setViewersCount(count));
+      socket.on('note-updated', ({ content: newContent }) => setContent(newContent));
+      socket.on('language-updated', ({ language: newLang }) => setLanguage(newLang));
+      socket.on('viewers-count', (count) => setViewersCount(count));
 
-    socket.on('user-typing', ({ username }) => {
-      setTypingUser(username);
-      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-      typingTimeoutRef.current = setTimeout(() => setTypingUser(null), 1500);
-    });
+      socket.on('user-typing', ({ username }) => {
+        setTypingUser(username);
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = setTimeout(() => setTypingUser(null), 1500);
+      });
 
-    socket.on('slug-changed', ({ newSlug }) => navigate('/' + newSlug));
+      socket.on('slug-changed', ({ newSlug }) => navigate('/' + newSlug));
+    } catch (_) {}
 
-    return () => { socket.disconnect(); };
-  }, [slug, token, navigate, supabaseConnected]);
+    return () => {
+      if (socketRef.current) socketRef.current.disconnect();
+      if (supabaseChannelRef.current) supabaseChannelRef.current.unsubscribe();
+      if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+    };
+  }, [slug, token, navigate]);
 
 
-  const handleContentChange = (newVal) => {
+  const handleContentChange = (newVal: string) => {
     setContent(newVal);
     setIsSyncing(true);
     localStorage.setItem('local_note_' + slug, newVal);
@@ -199,32 +191,40 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
     }
     isHistoryAction.current = false;
 
-    // Supabase Realtime broadcast & auto-save
-    if (supabaseNoteService.isAvailable()) {
-      if (supabaseChannelRef.current) {
-        supabaseChannelRef.current.send({
-          type: 'broadcast',
-          event: 'content-change',
-          payload: { content: newVal },
-        });
-        supabaseChannelRef.current.send({
-          type: 'broadcast',
-          event: 'typing',
-          payload: { username: user ? user.username : 'Khách' },
-        });
-      }
-
-      setSaveStatus('saving');
-      if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
-      saveDebounceRef.current = setTimeout(async () => {
-        const ok = await supabaseNoteService.saveNote(slug, { content: newVal, ownerId: user?.id });
-        setSaveStatus(ok ? 'saved' : 'error');
-        setIsSyncing(false);
-      }, 500);
-    } else {
-      setSaveStatus('local_only');
-      setTimeout(() => setIsSyncing(false), 300);
+    // Realtime broadcast via Supabase
+    if (supabaseChannelRef.current) {
+      supabaseChannelRef.current.send({
+        type: 'broadcast',
+        event: 'content-change',
+        payload: { content: newVal },
+      });
+      supabaseChannelRef.current.send({
+        type: 'broadcast',
+        event: 'typing',
+        payload: { username: user ? user.username : 'Khách' },
+      });
     }
+
+    // Auto-save debounced directly to database via API
+    if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+    saveDebounceRef.current = setTimeout(async () => {
+      try {
+        const savedPass = localStorage.getItem('note_pass_' + slug) || '';
+        await fetch(getApiUrl(`/api/note/${slug}`), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-note-password': savedPass,
+            ...(token ? { Authorization: 'Bearer ' + token } : {}),
+          },
+          body: JSON.stringify({ content: newVal, language }),
+        });
+      } catch (err) {
+        console.warn('Auto-save error:', err);
+      } finally {
+        setIsSyncing(false);
+      }
+    }, 400);
 
     if (socketRef.current) {
       socketRef.current.emit('note-change', { slug, content: newVal, userId: user ? user.id : null });
@@ -232,18 +232,27 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
     }
   };
 
-  const handleLanguageChange = (newLang) => {
+  const handleLanguageChange = (newLang: string) => {
     setLanguage(newLang);
-    if (supabaseNoteService.isAvailable()) {
-      if (supabaseChannelRef.current) {
-        supabaseChannelRef.current.send({
-          type: 'broadcast',
-          event: 'language-change',
-          payload: { language: newLang },
-        });
-      }
-      supabaseNoteService.saveNote(slug, { language: newLang });
+    if (supabaseChannelRef.current) {
+      supabaseChannelRef.current.send({
+        type: 'broadcast',
+        event: 'language-change',
+        payload: { language: newLang },
+      });
     }
+
+    const savedPass = localStorage.getItem('note_pass_' + slug) || '';
+    fetch(getApiUrl(`/api/note/${slug}`), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-note-password': savedPass,
+        ...(token ? { Authorization: 'Bearer ' + token } : {}),
+      },
+      body: JSON.stringify({ content, language: newLang }),
+    }).catch(console.warn);
+
     if (socketRef.current) socketRef.current.emit('language-change', { slug, language: newLang });
   };
 
@@ -253,12 +262,6 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
       const prev = history[historyIndex - 1];
       setHistoryIndex(historyIndex - 1);
       setContent(prev);
-      localStorage.setItem('local_note_' + slug, prev);
-      if (supabaseNoteService.isAvailable() && supabaseChannelRef.current) {
-        supabaseChannelRef.current.send({ type: 'broadcast', event: 'content-change', payload: { content: prev } });
-        supabaseNoteService.saveNote(slug, { content: prev });
-      }
-      if (socketRef.current) socketRef.current.emit('note-change', { slug, content: prev });
     }
   };
 
@@ -268,12 +271,6 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
       const next = history[historyIndex + 1];
       setHistoryIndex(historyIndex + 1);
       setContent(next);
-      localStorage.setItem('local_note_' + slug, next);
-      if (supabaseNoteService.isAvailable() && supabaseChannelRef.current) {
-        supabaseChannelRef.current.send({ type: 'broadcast', event: 'content-change', payload: { content: next } });
-        supabaseNoteService.saveNote(slug, { content: next });
-      }
-      if (socketRef.current) socketRef.current.emit('note-change', { slug, content: next });
     }
   };
 
@@ -284,30 +281,17 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
     setShowShareModal(true);
   };
 
-  const handleUnlockNote = async (e) => {
+  const handleUnlockNote = async (e: React.FormEvent) => {
     e.preventDefault();
     setUnlockError(null);
     try {
-      if (supabaseNoteService.isAvailable()) {
-        const note = await supabaseNoteService.getNote(slug);
-        if (note && note.password) {
-          const isValid = supabaseNoteService.verifyPassword(enteredPass, note.password);
-          if (!isValid) throw new Error('Mật khẩu không đúng');
-          localStorage.setItem('note_pass_' + slug, enteredPass);
-          setContent(note.content || '');
-          setLanguage(note.language || 'plaintext');
-          setIsLocked(false);
-          return;
-        }
-      }
-
       const res = await fetch(getApiUrl('/api/note/' + slug + '/verify'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: enteredPass }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Mật khẩu không đúng');
+      if (!res.ok || !data.success) throw new Error(data.error || 'Mật khẩu không đúng');
 
       localStorage.setItem('note_pass_' + slug, enteredPass);
       setContent(data.content || '');
@@ -331,8 +315,6 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
         setIsDarkMode={setIsDarkMode}
         onOpenAuth={() => setShowAuthModal(true)}
         onOpenPassword={() => setShowPasswordModal(true)}
-        onOpenSupabaseConfig={() => setShowSupabaseModal(true)}
-        isSupabaseConnected={supabaseConnected}
       />
 
       {isLocked ? (
@@ -402,9 +384,6 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
             content={content}
             isSyncing={isSyncing}
             typingUser={typingUser}
-            isSupabaseConnected={supabaseConnected}
-            saveStatus={saveStatus}
-            onOpenSupabaseConfig={() => setShowSupabaseModal(true)}
           />
         </>
       )}
@@ -440,16 +419,6 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
       <AuthModal
         isOpen={showAuthModal}
         onClose={() => setShowAuthModal(false)}
-      />
-
-      <SupabaseConfigModal
-        isOpen={showSupabaseModal}
-        onClose={() => setShowSupabaseModal(false)}
-        onSuccess={() => {
-          showToast('Đã kết nối Supabase Cloud thành công!');
-          setSupabaseConnected(true);
-          setSaveStatus('saved');
-        }}
       />
     </div>
   );

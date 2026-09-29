@@ -1,176 +1,156 @@
 const fs = require('fs');
 const path = require('path');
 const { Pool } = require('pg');
-const { createClient } = require('@supabase/supabase-js');
 
-// 1. PostgreSQL Database setup (Direct connection string)
-const DEFAULT_PG_URL = 'postgresql://postgres.gzlklljypwetgafcdamz:ANx79WCy9ACrGWYH@aws-0-ap-south-1.pooler.supabase.com:5432/postgres';
-const PG_CONN_STRING = process.env.DATABASE_URL || DEFAULT_PG_URL;
+// Direct PostgreSQL connection string
+const DIRECT_PG_URL = 'postgresql://postgres:ANx79WCy9ACrGWYH@db.gzlklljypwetgafcdamz.supabase.co:5432/postgres';
+// Fallback pooler URL for IPv4-only networks
+const POOLER_FALLBACK_URL = 'postgresql://postgres.gzlklljypwetgafcdamz:ANx79WCy9ACrGWYH@aws-0-ap-south-1.pooler.supabase.com:5432/postgres';
 
-let pgPool = null;
-try {
-  pgPool = new Pool({
-    connectionString: PG_CONN_STRING,
-    ssl: { rejectUnauthorized: false }
-  });
-  console.log('[Database] Configured PostgreSQL direct pool.');
-} catch (e) {
-  console.warn('[Database] PostgreSQL pool init failed:', e.message);
-}
+const PG_CONN_STRING = process.env.DATABASE_URL || DIRECT_PG_URL;
 
-// 2. Supabase Cloud REST/Realtime setup (Optional)
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://gzlklljypwetgafcdamz.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
-let supabase = null;
-if (SUPABASE_URL && SUPABASE_KEY) {
+let pgPool = new Pool({
+  connectionString: PG_CONN_STRING,
+  ssl: { rejectUnauthorized: false },
+  connectionTimeoutMillis: 5000,
+});
+
+let usingFallback = false;
+
+async function executeQuery(text, params = []) {
   try {
-    supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-    console.log('[Database] Connected to Supabase Cloud API:', SUPABASE_URL);
+    return await pgPool.query(text, params);
   } catch (err) {
-    console.warn('[Database] Failed to init Supabase:', err.message);
+    const isDnsError = 
+      err.code === 'ENOTFOUND' || 
+      err.code === 'ENOENT' || 
+      (err.message && (err.message.includes('ENOTFOUND') || err.message.includes('ENOENT') || err.message.includes('getaddrinfo')));
+
+    if (!usingFallback && isDnsError) {
+      console.log('[PostgreSQL] Direct IPv6 address not resolvable on this network, switching to Supabase IPv4 pooler...');
+      usingFallback = true;
+      pgPool = new Pool({
+        connectionString: POOLER_FALLBACK_URL,
+        ssl: { rejectUnauthorized: false },
+        connectionTimeoutMillis: 5000,
+      });
+      return await pgPool.query(text, params);
+    }
+    throw err;
   }
 }
 
+// In-memory cache for ultra-fast sync
 const memNotes = new Map();
 const memUsers = new Map();
 
-// Preload data from PostgreSQL
-if (pgPool) {
-  pgPool.query('SELECT * FROM notes').then((res) => {
-    for (const row of res.rows) {
-      memNotes.set(row.slug, {
-        slug: row.slug,
-        content: row.content || '',
-        password: row.password || null,
-        language: row.language || 'plaintext',
-        ownerId: row.owner_id || null,
-        createdAt: row.created_at || new Date().toISOString(),
-        updatedAt: row.updated_at || new Date().toISOString(),
-      });
-    }
-    console.log(`[PostgreSQL] Preloaded ${res.rows.length} notes from database.`);
-  }).catch((err) => {
-    console.warn('[PostgreSQL Notes Preload]:', err.message);
-  });
-
-  pgPool.query('SELECT * FROM users').then((res) => {
-    for (const row of res.rows) {
-      memUsers.set(row.id, {
-        id: row.id,
-        username: row.username,
-        email: row.email,
-        password: row.password,
-        createdAt: row.created_at || new Date().toISOString(),
-      });
-    }
-    console.log(`[PostgreSQL] Preloaded ${res.rows.length} users from database.`);
-  }).catch((err) => {
-    console.warn('[PostgreSQL Users Preload]:', err.message);
-  });
-}
-
-const DATA_DIR = path.join(__dirname, '../data');
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-
-const DB_PATH = path.join(DATA_DIR, 'notepad.db');
-const Database = require('better-sqlite3');
-const sqlite = new Database(DB_PATH);
-sqlite.pragma('journal_mode = WAL');
-sqlite.pragma('synchronous = NORMAL');
-sqlite.pragma('foreign_keys = ON');
-
-sqlite.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    username TEXT UNIQUE NOT NULL COLLATE NOCASE,
-    email TEXT UNIQUE NOT NULL COLLATE NOCASE,
-    password TEXT NOT NULL,
-    createdAt TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS notes (
-    slug TEXT PRIMARY KEY,
-    content TEXT DEFAULT '',
-    password TEXT DEFAULT NULL,
-    language TEXT DEFAULT 'plaintext',
-    ownerId TEXT DEFAULT NULL,
-    createdAt TEXT NOT NULL,
-    updatedAt TEXT NOT NULL,
-    FOREIGN KEY (ownerId) REFERENCES users(id) ON DELETE SET NULL
-  );
-  CREATE INDEX IF NOT EXISTS idx_notes_owner ON notes(ownerId);
-`);
-
-// Migration from legacy JSON if empty
+// Optional local SQLite support
+let sqlite = null;
+let stmts = null;
 try {
-  const usersCount = sqlite.prepare('SELECT COUNT(*) as count FROM users').get().count;
-  const usersJsonPath = path.join(DATA_DIR, 'users.json');
-  if (usersCount === 0 && fs.existsSync(usersJsonPath)) {
-    const rawUsers = JSON.parse(fs.readFileSync(usersJsonPath, 'utf-8') || '[]');
-    const ins = sqlite.prepare('INSERT OR IGNORE INTO users VALUES (@id, @username, @email, @password, @createdAt)');
-    sqlite.transaction((list) => { for (const u of list) if (u.id && u.username) ins.run(u); })(rawUsers);
-  }
+  const Database = require('better-sqlite3');
+  const DATA_DIR = path.join(__dirname, '../data');
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  const DB_PATH = path.join(DATA_DIR, 'notepad.db');
+  sqlite = new Database(DB_PATH);
+  sqlite.pragma('journal_mode = WAL');
+  stmts = {
+    getNote: sqlite.prepare('SELECT * FROM notes WHERE slug = ?'),
+    insertNote: sqlite.prepare('INSERT INTO notes VALUES (@slug, @content, @password, @language, @ownerId, @createdAt, @updatedAt)'),
+    updateNote: sqlite.prepare('UPDATE notes SET content=@content, password=@password, language=@language, ownerId=@ownerId, updatedAt=@updatedAt WHERE slug=@slug'),
+  };
+} catch (_) {}
 
-  const notesCount = sqlite.prepare('SELECT COUNT(*) as count FROM notes').get().count;
-  const notesJsonPath = path.join(DATA_DIR, 'notes.json');
-  if (notesCount === 0 && fs.existsSync(notesJsonPath)) {
-    const rawNotes = JSON.parse(fs.readFileSync(notesJsonPath, 'utf-8') || '{}');
-    const ins = sqlite.prepare(`INSERT OR IGNORE INTO notes VALUES (@slug, @content, @password, @language, @ownerId, @createdAt, @updatedAt)`);
-    sqlite.transaction((list) => {
-      for (const n of list) {
-        if (n.slug) {
-          ins.run({
-            slug: n.slug,
-            content: n.content || '',
-            password: n.password || null,
-            language: n.language || 'plaintext',
-            ownerId: n.ownerId || null,
-            createdAt: n.createdAt || new Date().toISOString(),
-            updatedAt: n.updatedAt || new Date().toISOString(),
-          });
-        }
-      }
-    })(Object.values(rawNotes));
+async function initPgTables() {
+  try {
+    await executeQuery(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS notes (
+        slug TEXT PRIMARY KEY,
+        content TEXT DEFAULT '',
+        password TEXT DEFAULT NULL,
+        language TEXT DEFAULT 'plaintext',
+        owner_id TEXT DEFAULT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    console.log('[PostgreSQL] Connected and verified tables.');
+  } catch (err) {
+    console.warn('[PostgreSQL Init]:', err.message);
   }
-} catch (e) {
-  console.warn('[SQLite] Migration:', e.message);
 }
+initPgTables();
 
-const stmts = {
-  getNote: sqlite.prepare('SELECT * FROM notes WHERE slug = ?'),
-  getAllNotes: sqlite.prepare('SELECT * FROM notes'),
-  insertNote: sqlite.prepare(`
-    INSERT INTO notes (slug, content, password, language, ownerId, createdAt, updatedAt)
-    VALUES (@slug, @content, @password, @language, @ownerId, @createdAt, @updatedAt)
-  `),
-  updateNote: sqlite.prepare(`
-    UPDATE notes SET content = @content, password = @password, language = @language, ownerId = @ownerId, updatedAt = @updatedAt
-    WHERE slug = @slug
-  `),
-  updateSlug: sqlite.prepare('UPDATE notes SET slug = ?, updatedAt = ? WHERE slug = ?'),
-  deleteNote: sqlite.prepare('DELETE FROM notes WHERE slug = ?'),
-  getUserNotes: sqlite.prepare('SELECT * FROM notes WHERE ownerId = ? ORDER BY updatedAt DESC'),
-  getUserByUsername: sqlite.prepare('SELECT * FROM users WHERE username = ? COLLATE NOCASE'),
-  getUserByEmail: sqlite.prepare('SELECT * FROM users WHERE email = ? COLLATE NOCASE'),
-  getUserById: sqlite.prepare('SELECT * FROM users WHERE id = ?'),
-  insertUser: sqlite.prepare('INSERT INTO users VALUES (@id, @username, @email, @password, @createdAt)'),
-};
+function mapRowToNote(row) {
+  if (!row) return null;
+  return {
+    slug: row.slug,
+    content: row.content || '',
+    password: row.password || null,
+    language: row.language || 'plaintext',
+    ownerId: row.owner_id !== undefined ? row.owner_id : row.ownerId || null,
+    createdAt: row.created_at || row.createdAt || new Date().toISOString(),
+    updatedAt: row.updated_at || row.updatedAt || new Date().toISOString(),
+  };
+}
 
 
 const db = {
-  getNote(slug) {
+  async getNote(slug) {
     if (memNotes.has(slug)) return memNotes.get(slug);
-    return stmts.getNote.get(slug) || null;
+
+    try {
+      const res = await executeQuery('SELECT * FROM notes WHERE slug = $1', [slug]);
+      if (res.rows.length > 0) {
+        const note = mapRowToNote(res.rows[0]);
+        memNotes.set(slug, note);
+        return note;
+      }
+    } catch (err) {
+      console.warn('[PostgreSQL getNote]:', err.message);
+    }
+
+    if (stmts && stmts.getNote) {
+      try {
+        const local = stmts.getNote.get(slug);
+        if (local) {
+          memNotes.set(slug, local);
+          return local;
+        }
+      } catch (_) {}
+    }
+
+    return null;
   },
-  getAllNotes() {
+
+  async getAllNotes() {
     const map = {};
-    for (const r of stmts.getAllNotes.all()) map[r.slug] = r;
+    try {
+      const res = await executeQuery('SELECT * FROM notes');
+      for (const row of res.rows) {
+        const note = mapRowToNote(row);
+        map[note.slug] = note;
+        memNotes.set(note.slug, note);
+      }
+    } catch (err) {
+      console.warn('[PostgreSQL getAllNotes]:', err.message);
+    }
     for (const [k, v] of memNotes.entries()) map[k] = v;
     return map;
   },
-  saveNote(slug, data = {}) {
-    const existing = this.getNote(slug);
+
+  async saveNote(slug, data = {}) {
+    const existing = await this.getNote(slug);
     const now = new Date().toISOString();
     let note;
+
     if (!existing) {
       note = {
         slug,
@@ -181,7 +161,6 @@ const db = {
         createdAt: data.createdAt || now,
         updatedAt: data.updatedAt || now,
       };
-      try { stmts.insertNote.run(note); } catch (e) {}
     } else {
       note = {
         ...existing,
@@ -191,15 +170,14 @@ const db = {
         ownerId: data.ownerId !== undefined ? data.ownerId : existing.ownerId,
         updatedAt: data.updatedAt || now,
       };
-      try { stmts.updateNote.run(note); } catch (e) {}
     }
 
     memNotes.set(slug, note);
 
-    if (pgPool) {
-      pgPool.query(`
-        INSERT INTO notes (slug, content, password, language, owner_id, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6)
+    try {
+      await executeQuery(`
+        INSERT INTO notes (slug, content, password, language, owner_id, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (slug)
         DO UPDATE SET
           content = EXCLUDED.content,
@@ -207,115 +185,134 @@ const db = {
           language = EXCLUDED.language,
           owner_id = EXCLUDED.owner_id,
           updated_at = EXCLUDED.updated_at
-      `, [note.slug, note.content, note.password, note.language, note.ownerId, note.updatedAt])
-      .catch(err => console.warn('[PostgreSQL Save Error]:', err.message));
+      `, [note.slug, note.content, note.password, note.language, note.ownerId, note.createdAt, note.updatedAt]);
+    } catch (err) {
+      console.warn('[PostgreSQL saveNote]:', err.message);
     }
 
-    if (supabase) {
-      supabase.from('notes').upsert({
-        slug: note.slug,
-        content: note.content,
-        password: note.password,
-        language: note.language,
-        owner_id: note.ownerId,
-        updated_at: note.updatedAt,
-      }, { onConflict: 'slug' }).then(({ error }) => {
-        if (error) console.warn('[Supabase Sync Error]:', error.message);
-      });
+    if (stmts) {
+      try {
+        if (!existing) stmts.insertNote.run(note);
+        else stmts.updateNote.run(note);
+      } catch (_) {}
     }
 
     return note;
   },
-  changeSlug(oldSlug, newSlug) {
-    const old = this.getNote(oldSlug);
+  async changeSlug(oldSlug, newSlug) {
+    const old = await this.getNote(oldSlug);
     if (!old) return { success: false, error: 'Ghi chú cũ không tồn tại' };
-    if (this.getNote(newSlug)) return { success: false, error: 'URL mới này đã được người khác sử dụng, vui lòng chọn tên khác' };
-    
+
+    const target = await this.getNote(newSlug);
+    if (target) return { success: false, error: 'URL mới này đã được người khác sử dụng, vui lòng chọn tên khác' };
+
     const now = new Date().toISOString();
     const updated = { ...old, slug: newSlug, updatedAt: now };
-    
-    try { stmts.updateSlug.run(newSlug, now, oldSlug); } catch (e) {}
+
+    try {
+      await executeQuery('UPDATE notes SET slug = $1, updated_at = $2 WHERE slug = $3', [newSlug, now, oldSlug]);
+    } catch (err) {
+      console.warn('[PostgreSQL changeSlug]:', err.message);
+    }
+
     memNotes.delete(oldSlug);
     memNotes.set(newSlug, updated);
-
-    if (pgPool) {
-      pgPool.query('UPDATE notes SET slug = $1, updated_at = $2 WHERE slug = $3', [newSlug, now, oldSlug])
-        .catch(err => console.warn('[PostgreSQL ChangeSlug Error]:', err.message));
-    }
-
-    if (supabase) {
-      supabase.from('notes').delete().eq('slug', oldSlug).then(() => {
-        supabase.from('notes').upsert({
-          slug: updated.slug,
-          content: updated.content,
-          password: updated.password,
-          language: updated.language,
-          owner_id: updated.ownerId,
-          updated_at: updated.updatedAt,
-        });
-      });
-    }
-
     return { success: true, note: updated };
   },
-  deleteNote(slug) {
-    memNotes.delete(slug);
-    if (pgPool) {
-      pgPool.query('DELETE FROM notes WHERE slug = $1', [slug])
-        .catch(err => console.warn('[PostgreSQL Delete Error]:', err.message));
-    }
-    if (supabase) supabase.from('notes').delete().eq('slug', slug);
-    return stmts.deleteNote.run(slug).changes > 0;
-  },
-  getUserNotes(userId) {
-    if (stmts) {
-      try { return stmts.getUserNotes.all(userId); } catch (e) {}
-    }
-    const list = [];
-    for (const n of memNotes.values()) if (n.ownerId === userId) list.push(n);
-    return list;
-  },
-  findUserByUsername(username) {
-    return username ? stmts.getUserByUsername.get(username) || null : null;
-  },
-  findUserByEmail(email) {
-    return email ? stmts.getUserByEmail.get(email) || null : null;
-  },
-  findUserById(id) {
-    return id ? stmts.getUserById.get(id) || null : null;
-  },
-  createUser(user) {
-    memUsers.set(user.id, user);
-    try { stmts.insertUser.run(user); } catch (e) {}
 
-    if (pgPool) {
-      pgPool.query(`
+  async deleteNote(slug) {
+    memNotes.delete(slug);
+    try {
+      await executeQuery('DELETE FROM notes WHERE slug = $1', [slug]);
+      return true;
+    } catch (err) {
+      console.warn('[PostgreSQL deleteNote]:', err.message);
+      return false;
+    }
+  },
+
+  async getUserNotes(userId) {
+    try {
+      const res = await executeQuery('SELECT * FROM notes WHERE owner_id = $1 ORDER BY updated_at DESC', [userId]);
+      const list = res.rows.map(mapRowToNote);
+      for (const n of list) memNotes.set(n.slug, n);
+      return list;
+    } catch (err) {
+      console.warn('[PostgreSQL getUserNotes]:', err.message);
+      const list = [];
+      for (const n of memNotes.values()) if (n.ownerId === userId) list.push(n);
+      return list;
+    }
+  },
+
+  async findUserByUsername(username) {
+    if (!username) return null;
+    for (const u of memUsers.values()) {
+      if (u.username && u.username.toLowerCase() === username.toLowerCase()) return u;
+    }
+    try {
+      const res = await executeQuery('SELECT * FROM users WHERE LOWER(username) = LOWER($1)', [username]);
+      if (res.rows.length > 0) {
+        const u = res.rows[0];
+        memUsers.set(u.id, u);
+        return u;
+      }
+    } catch (err) {
+      console.warn('[PostgreSQL findUserByUsername]:', err.message);
+    }
+    return null;
+  },
+
+  async findUserByEmail(email) {
+    if (!email) return null;
+    for (const u of memUsers.values()) {
+      if (u.email && u.email.toLowerCase() === email.toLowerCase()) return u;
+    }
+    try {
+      const res = await executeQuery('SELECT * FROM users WHERE LOWER(email) = LOWER($1)', [email]);
+      if (res.rows.length > 0) {
+        const u = res.rows[0];
+        memUsers.set(u.id, u);
+        return u;
+      }
+    } catch (err) {
+      console.warn('[PostgreSQL findUserByEmail]:', err.message);
+    }
+    return null;
+  },
+
+  async findUserById(id) {
+    if (!id) return null;
+    if (memUsers.has(id)) return memUsers.get(id);
+    try {
+      const res = await executeQuery('SELECT * FROM users WHERE id = $1', [id]);
+      if (res.rows.length > 0) {
+        const u = res.rows[0];
+        memUsers.set(u.id, u);
+        return u;
+      }
+    } catch (err) {
+      console.warn('[PostgreSQL findUserById]:', err.message);
+    }
+    return null;
+  },
+
+  async createUser(user) {
+    memUsers.set(user.id, user);
+    try {
+      await executeQuery(`
         INSERT INTO users (id, username, email, password, created_at)
         VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (id) DO UPDATE SET
           username = EXCLUDED.username,
           email = EXCLUDED.email,
           password = EXCLUDED.password
-      `, [user.id, user.username, user.email, user.password, user.createdAt])
-      .catch(err => console.warn('[PostgreSQL CreateUser Error]:', err.message));
-    }
-
-    if (supabase) {
-      supabase.from('users').upsert({
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        password: user.password,
-        created_at: user.createdAt,
-      }).then(({ error }) => {
-        if (error) console.warn('[Supabase User Sync Error]:', error.message);
-      });
+      `, [user.id, user.username, user.email, user.password, user.createdAt]);
+    } catch (err) {
+      console.warn('[PostgreSQL createUser]:', err.message);
     }
     return user;
   },
-  close() {
-    sqlite.close();
-  }
 };
 
 module.exports = db;

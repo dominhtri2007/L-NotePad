@@ -13,11 +13,11 @@ async function checkNoteAuth(note, providedPassword, user) {
 }
 
 // User notes
-router.get('/my', (req, res) => {
+router.get('/my', async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Vui lòng đăng nhập' });
   }
-  const notes = db.getUserNotes(req.user.id);
+  const notes = await db.getUserNotes(req.user.id);
   const formatted = notes.map(n => ({
     slug: n.slug,
     language: n.language || 'plaintext',
@@ -30,11 +30,34 @@ router.get('/my', (req, res) => {
   res.json({ notes: formatted });
 });
 
+// Save or update note content & language
+router.post('/:slug', async (req, res) => {
+  const { slug } = req.params;
+  const { content, language } = req.body;
+  const notePassword = req.headers['x-note-password'];
+
+  let note = await db.getNote(slug);
+  if (note && note.password) {
+    const isAuthed = await checkNoteAuth(note, notePassword, req.user);
+    if (!isAuthed) {
+      return res.status(403).json({ error: 'Ghi chú có mật khẩu bảo vệ' });
+    }
+  }
+
+  const saved = await db.saveNote(slug, {
+    content: content !== undefined ? content : (note ? note.content : ''),
+    language: language !== undefined ? language : (note ? note.language : 'plaintext'),
+    ownerId: req.user ? req.user.id : (note ? note.ownerId : null),
+  });
+
+  res.json({ success: true, note: saved });
+});
+
 // Get note by slug
 router.get('/:slug', async (req, res) => {
   const { slug } = req.params;
   const notePassword = req.headers['x-note-password'];
-  const note = db.getNote(slug);
+  const note = await db.getNote(slug);
 
   if (!note) {
     return res.json({
@@ -77,7 +100,7 @@ router.get('/:slug', async (req, res) => {
 router.post('/:slug/verify', async (req, res) => {
   const { slug } = req.params;
   const { password } = req.body;
-  const note = db.getNote(slug);
+  const note = await db.getNote(slug);
 
   if (!note || !note.password) {
     return res.json({ success: true });
@@ -99,10 +122,10 @@ router.post('/:slug/verify', async (req, res) => {
 router.post('/:slug/set-password', async (req, res) => {
   const { slug } = req.params;
   const { password, currentPassword } = req.body;
-  let note = db.getNote(slug);
+  let note = await db.getNote(slug);
 
   if (!note) {
-    note = db.saveNote(slug, {
+    note = await db.saveNote(slug, {
       content: '',
       ownerId: req.user ? req.user.id : null,
     });
@@ -122,7 +145,7 @@ router.post('/:slug/set-password', async (req, res) => {
     newHashed = await bcrypt.hash(password.trim(), 10);
   }
 
-  db.saveNote(slug, { password: newHashed });
+  await db.saveNote(slug, { password: newHashed });
 
   res.json({
     success: true,
@@ -132,18 +155,19 @@ router.post('/:slug/set-password', async (req, res) => {
 });
 
 // Claim note for logged-in user
-router.post('/:slug/claim', (req, res) => {
+router.post('/:slug/claim', async (req, res) => {
   if (!req.user) {
     return res.status(401).json({ error: 'Vui lòng đăng nhập' });
   }
   const { slug } = req.params;
-  const note = db.getNote(slug);
+  const note = await db.getNote(slug);
   if (note) {
-    db.saveNote(slug, { ownerId: req.user.id });
+    await db.saveNote(slug, { ownerId: req.user.id });
   } else {
-    db.saveNote(slug, { ownerId: req.user.id, content: '' });
+    await db.saveNote(slug, { ownerId: req.user.id, content: '' });
   }
   res.json({ success: true, message: 'Đã lưu ghi chú này vào tài khoản của bạn' });
 });
 
 module.exports = router;
+

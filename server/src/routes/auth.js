@@ -40,11 +40,11 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'Mật khẩu phải có ít nhất 6 ký tự' });
     }
 
-    if (db.findUserByUsername(username)) {
+    if (await db.findUserByUsername(username)) {
       return res.status(400).json({ error: 'Tên đăng nhập đã tồn tại' });
     }
 
-    if (db.findUserByEmail(email)) {
+    if (await db.findUserByEmail(email)) {
       return res.status(400).json({ error: 'Email đã được đăng ký' });
     }
 
@@ -57,7 +57,7 @@ router.post('/register', async (req, res) => {
       createdAt: new Date().toISOString(),
     };
 
-    db.createUser(newUser);
+    await db.createUser(newUser);
 
     const token = jwt.sign({ id: newUser.id, username: newUser.username, email: newUser.email }, JWT_SECRET, {
       expiresIn: '7d',
@@ -83,7 +83,7 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Vui lòng nhập tên đăng nhập và mật khẩu' });
     }
 
-    const user = db.findUserByUsername(username);
+    const user = await db.findUserByUsername(username);
     if (!user) {
       return res.status(401).json({ error: 'Tên đăng nhập hoặc mật khẩu không chính xác' });
     }

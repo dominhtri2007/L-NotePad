@@ -11,7 +11,16 @@
     "build": "cd client && npm install && npm run build",
     "start": "cd server && npm start"
   },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.23.0"
+  },
   "devDependencies": {
     "concurrently": "^8.2.2"
   }
 }
+

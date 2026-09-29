@@ -20,29 +20,31 @@ export const MyNotesPage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean
   useEffect(() => {
     if (!token && !user) { navigate('/'); return; }
 
-    if (supabaseNoteService.isAvailable() && user?.id) {
-      supabaseNoteService.getUserNotes(user.id)
-        .then((data) => {
-          const mapped = data.map(n => ({
-            slug: n.slug,
-            preview: (n.content || '').slice(0, 100),
-            chars: (n.content || '').length,
-            words: (n.content || '').trim().split(/\s+/).filter(Boolean).length,
-            hasPassword: Boolean(n.password),
-            language: n.language,
-            updatedAt: n.updated_at,
-          }));
-          setNotes(mapped);
-        })
-        .catch(console.error)
-        .finally(() => setLoading(false));
-      return;
-    }
-
-    fetch(getApiUrl('/api/notes/my'), { headers: { Authorization: 'Bearer ' + token } })
-      .then(res => res.json())
-      .then(data => setNotes(data.notes || []))
-      .catch(console.error)
+    fetch(getApiUrl('/api/notes/my'), {
+      headers: { Authorization: 'Bearer ' + token },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data && data.notes) {
+          setNotes(data.notes);
+        } else if (supabaseNoteService.isAvailable() && user?.id) {
+          return supabaseNoteService.getUserNotes(user.id).then((items) => {
+            const mapped = items.map((n) => ({
+              slug: n.slug,
+              preview: (n.content || '').slice(0, 100),
+              chars: (n.content || '').length,
+              words: (n.content || '').trim().split(/\s+/).filter(Boolean).length,
+              hasPassword: Boolean(n.password),
+              language: n.language,
+              updatedAt: n.updated_at,
+            }));
+            setNotes(mapped);
+          });
+        }
+      })
+      .catch((err) => {
+        console.error('Fetch my notes error:', err);
+      })
       .finally(() => setLoading(false));
   }, [token, user, navigate]);
 

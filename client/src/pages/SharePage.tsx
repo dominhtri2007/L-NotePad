@@ -7,9 +7,8 @@ import { StatusBar } from '../components/StatusBar';
 import { Toolbar } from '../components/Toolbar';
 import { useLanguage } from '../context/LanguageContext';
 import { Eye, Edit3, ShieldAlert } from 'lucide-react';
-import { getSocketUrl } from '../config';
+import { getApiUrl, getSocketUrl } from '../config';
 import { getSupabase } from '../services/supabaseClient';
-import { supabaseNoteService } from '../services/supabaseNoteService';
 
 export const SharePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; setIsDarkMode: (v: boolean) => void }) => {
   const { slug } = useParams();
@@ -18,7 +17,7 @@ export const SharePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; 
   const [language, setLanguage] = useState('plaintext');
   const [fontSize, setFontSize] = useState(16);
   const [viewersCount, setViewersCount] = useState(1);
-  const [typingUser, setTypingUser] = useState(null);
+  const [typingUser, setTypingUser] = useState<string | null>(null);
   const [locked, setLocked] = useState(false);
 
   useEffect(() => {
@@ -26,32 +25,37 @@ export const SharePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; 
     const localContent = localStorage.getItem('local_note_' + slug);
     if (localContent) setContent(localContent);
 
-    // Supabase Mode
-    if (supabaseNoteService.isAvailable()) {
-      supabaseNoteService.getNote(slug).then((note) => {
-        if (!note) return;
-        if (note.password) {
+    // Fetch from backend API
+    fetch(getApiUrl(`/api/note/${slug}`))
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data) return;
+        if (data.locked) {
           setLocked(true);
           return;
         }
-        setContent(note.content || '');
-        setLanguage(note.language || 'plaintext');
-      });
+        setLocked(false);
+        if (data.content !== undefined) setContent(data.content);
+        if (data.language) setLanguage(data.language);
+      })
+      .catch(console.warn);
 
-      const client = getSupabase();
-      if (!client) return;
-      const channel = client.channel(`note-room:${slug}`, {
+    // Realtime via Supabase if configured
+    const client = getSupabase();
+    let channel: any = null;
+    if (client) {
+      channel = client.channel(`note-room:${slug}`, {
         config: { broadcast: { self: false } },
       });
 
       channel
-        .on('broadcast', { event: 'content-change' }, ({ payload }) => {
+        .on('broadcast', { event: 'content-change' }, ({ payload }: any) => {
           if (payload?.content !== undefined) setContent(payload.content);
         })
-        .on('broadcast', { event: 'language-change' }, ({ payload }) => {
+        .on('broadcast', { event: 'language-change' }, ({ payload }: any) => {
           if (payload?.language) setLanguage(payload.language);
         })
-        .on('broadcast', { event: 'typing' }, ({ payload }) => {
+        .on('broadcast', { event: 'typing' }, ({ payload }: any) => {
           setTypingUser(payload?.username);
           setTimeout(() => setTypingUser(null), 1500);
         })
@@ -59,15 +63,11 @@ export const SharePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; 
           const presenceState = channel.presenceState();
           setViewersCount(Math.max(1, Object.keys(presenceState).length));
         })
-        .subscribe(async (status) => {
+        .subscribe(async (status: string) => {
           if (status === 'SUBSCRIBED') {
             await channel.track({ online_at: Date.now() });
           }
         });
-
-      return () => {
-        channel.unsubscribe();
-      };
     }
 
     // Socket.IO Backend Mode
@@ -101,7 +101,10 @@ export const SharePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; 
       setTimeout(() => setTypingUser(null), 1500);
     });
 
-    return () => { socket.disconnect(); };
+    return () => {
+      if (channel) channel.unsubscribe();
+      socket.disconnect();
+    };
   }, [slug]);
 
   return (
