@@ -46,6 +46,10 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
   const supabaseChannelRef = useRef<any>(null);
   const saveDebounceRef = useRef<any>(null);
   const typingTimeoutRef = useRef<any>(null);
+  // Keep latest token in a ref so handlers always use fresh value
+  // without causing the main useEffect to re-run on login
+  const tokenRef = useRef<string | null>(token);
+  useEffect(() => { tokenRef.current = token; }, [token]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -68,7 +72,7 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
     fetch(getApiUrl(`/api/note/${slug}`), {
       headers: {
         'x-note-password': savedPass,
-        ...(token ? { Authorization: 'Bearer ' + token } : {}),
+        ...(tokenRef.current ? { Authorization: 'Bearer ' + tokenRef.current } : {}),
       },
     })
       .then((res) => (res.ok ? res.json() : null))
@@ -136,7 +140,7 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
       socket.emit('join-note', {
         slug,
         password: savedPass,
-        userToken: token,
+        userToken: tokenRef.current,
       });
 
       socket.on('init-note', (data) => {
@@ -174,7 +178,7 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
       if (supabaseChannelRef.current) supabaseChannelRef.current.unsubscribe();
       if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
     };
-  }, [slug, token, navigate]);
+  }, [slug, navigate]);
 
 
   const handleContentChange = (newVal: string) => {
@@ -215,7 +219,7 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
           headers: {
             'Content-Type': 'application/json',
             'x-note-password': savedPass,
-            ...(token ? { Authorization: 'Bearer ' + token } : {}),
+            ...(tokenRef.current ? { Authorization: 'Bearer ' + tokenRef.current } : {}),
           },
           body: JSON.stringify({ content: newVal, language }),
         });
@@ -248,7 +252,7 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
       headers: {
         'Content-Type': 'application/json',
         'x-note-password': savedPass,
-        ...(token ? { Authorization: 'Bearer ' + token } : {}),
+        ...(tokenRef.current ? { Authorization: 'Bearer ' + tokenRef.current } : {}),
       },
       body: JSON.stringify({ content, language: newLang }),
     }).catch(console.warn);
@@ -298,7 +302,7 @@ export const NotePage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; s
       setLanguage(data.language || 'plaintext');
       setIsLocked(false);
       if (socketRef.current) {
-        socketRef.current.emit('join-note', { slug, password: enteredPass, userToken: token });
+        socketRef.current.emit('join-note', { slug, password: enteredPass, userToken: tokenRef.current });
       }
     } catch (err: any) {
       setUnlockError(err.message);
