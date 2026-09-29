@@ -3,13 +3,9 @@ import { X, Link2, AlertCircle, ArrowRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../context/LanguageContext';
 import { getApiUrl } from '../config';
-import { supabaseNoteService } from '../services/supabaseNoteService';
 
 export const ChangeUrlModal = ({ isOpen, onClose, currentSlug, hasPassword }: {
-  isOpen: boolean;
-  onClose: () => void;
-  currentSlug: string;
-  hasPassword?: boolean;
+  isOpen: boolean; onClose: () => void; currentSlug: string; hasPassword?: boolean;
 }) => {
   const { t } = useLanguage();
   const navigate = useNavigate();
@@ -17,32 +13,16 @@ export const ChangeUrlModal = ({ isOpen, onClose, currentSlug, hasPassword }: {
   const [currentPassword, setCurrentPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
+    e.preventDefault(); setError(null);
     const clean = newSlug.trim().toLowerCase();
     if (!clean) return setError(t.changeUrlModal.errEmpty);
     if (!/^[a-z0-9_-]+$/.test(clean)) return setError(t.changeUrlModal.errFormat);
     if (clean === currentSlug) return setError(t.changeUrlModal.errSame);
-
     setSubmitting(true);
     try {
-      if (supabaseNoteService.isAvailable()) {
-        const note = await supabaseNoteService.getNote(currentSlug);
-        if (note && note.password) {
-          const isValid = supabaseNoteService.verifyPassword(currentPassword || '', note.password);
-          if (!isValid) throw new Error('Mật khẩu hiện tại không đúng');
-        }
-        const res = await supabaseNoteService.changeSlug(currentSlug, clean);
-        if (!res.success) throw new Error(res.error || 'Failed');
-        onClose();
-        navigate(`/${clean}`);
-        return;
-      }
-
       const token = localStorage.getItem('notepad_token');
       const res = await fetch(getApiUrl(`/api/note/${currentSlug}/change-slug`), {
         method: 'POST',
@@ -51,8 +31,7 @@ export const ChangeUrlModal = ({ isOpen, onClose, currentSlug, hasPassword }: {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed');
-      onClose();
-      navigate(`/${clean}`);
+      onClose(); navigate(`/${clean}`);
     } catch (err: any) { setError(err.message); } finally { setSubmitting(false); }
   };
 

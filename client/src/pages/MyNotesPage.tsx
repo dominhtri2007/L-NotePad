@@ -6,7 +6,6 @@ import { useLanguage } from '../context/LanguageContext';
 import { BookOpen, Lock, ArrowRight, Copy, Check, Plus, Search } from 'lucide-react';
 import { generateRandomSlug } from '../utils/slug';
 import { getApiUrl } from '../config';
-import { supabaseNoteService } from '../services/supabaseNoteService';
 
 export const MyNotesPage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean; setIsDarkMode: (v: boolean) => void }) => {
   const { token, user } = useAuth();
@@ -27,19 +26,6 @@ export const MyNotesPage = ({ isDarkMode, setIsDarkMode }: { isDarkMode: boolean
       .then((data) => {
         if (data && data.notes) {
           setNotes(data.notes);
-        } else if (supabaseNoteService.isAvailable() && user?.id) {
-          return supabaseNoteService.getUserNotes(user.id).then((items) => {
-            const mapped = items.map((n) => ({
-              slug: n.slug,
-              preview: (n.content || '').slice(0, 100),
-              chars: (n.content || '').length,
-              words: (n.content || '').trim().split(/\s+/).filter(Boolean).length,
-              hasPassword: Boolean(n.password),
-              language: n.language,
-              updatedAt: n.updated_at,
-            }));
-            setNotes(mapped);
-          });
         }
       })
       .catch((err) => {

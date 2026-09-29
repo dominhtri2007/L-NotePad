@@ -2,14 +2,10 @@ import React, { useState } from 'react';
 import { X, Lock, Unlock, KeyRound, AlertCircle, CheckCircle } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 import { getApiUrl } from '../config';
-import { supabaseNoteService } from '../services/supabaseNoteService';
 
 export const PasswordModal = ({ isOpen, onClose, slug, hasPassword, onPasswordChanged }: {
-  isOpen: boolean;
-  onClose: () => void;
-  slug: string;
-  hasPassword?: boolean;
-  onPasswordChanged: (hasPass: boolean) => void;
+  isOpen: boolean; onClose: () => void; slug: string;
+  hasPassword?: boolean; onPasswordChanged: (hasPass: boolean) => void;
 }) => {
   const { t } = useLanguage();
   const [currentPassword, setCurrentPassword] = useState('');
@@ -18,81 +14,36 @@ export const PasswordModal = ({ isOpen, onClose, slug, hasPassword, onPasswordCh
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-
   if (!isOpen) return null;
 
+  const call = async (password: string) => {
+    const token = localStorage.getItem('notepad_token');
+    const res = await fetch(getApiUrl(`/api/note/${slug}/set-password`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ password, currentPassword }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed');
+    return data;
+  };
+
   const handleSetPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    if (newPassword && newPassword !== confirmPassword) {
-      setError(t.passwordModal.errMismatch);
-      return;
-    }
+    e.preventDefault(); setError(null);
+    if (newPassword && newPassword !== confirmPassword) { setError(t.passwordModal.errMismatch); return; }
     setSubmitting(true);
     try {
-      if (supabaseNoteService.isAvailable()) {
-        const note = await supabaseNoteService.getNote(slug);
-        if (note && note.password) {
-          const isValid = supabaseNoteService.verifyPassword(currentPassword || '', note.password);
-          if (!isValid) throw new Error('Mật khẩu hiện tại không đúng');
-        }
-        const hashed = supabaseNoteService.hashPassword(newPassword);
-        const ok = await supabaseNoteService.saveNote(slug, { password: hashed });
-        if (!ok) throw new Error('Không thể lưu mật khẩu vào Supabase');
-        localStorage.setItem('note_pass_' + slug, newPassword);
-        setSuccess('Cập nhật mật khẩu thành công!');
-        onPasswordChanged(true);
-        setTimeout(() => { onClose(); setSuccess(null); }, 1000);
-        return;
-      }
-
-      const token = localStorage.getItem('notepad_token');
-      const res = await fetch(getApiUrl(`/api/note/${slug}/set-password`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ password: newPassword, currentPassword }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed');
-      setSuccess(data.message || 'Success');
-      onPasswordChanged(data.hasPassword);
+      const data = await call(newPassword);
+      setSuccess(data.message || 'Success'); onPasswordChanged(data.hasPassword);
       setTimeout(() => { onClose(); setSuccess(null); }, 1000);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setSubmitting(false);
-    }
+    } catch (err: any) { setError(err.message); } finally { setSubmitting(false); }
   };
 
   const handleRemove = async () => {
-    setSubmitting(true);
-    setError(null);
+    setSubmitting(true); setError(null);
     try {
-      if (supabaseNoteService.isAvailable()) {
-        const note = await supabaseNoteService.getNote(slug);
-        if (note && note.password) {
-          const isValid = supabaseNoteService.verifyPassword(currentPassword || '', note.password);
-          if (!isValid) throw new Error('Mật khẩu hiện tại không đúng');
-        }
-        const ok = await supabaseNoteService.saveNote(slug, { password: null });
-        if (!ok) throw new Error('Không thể gỡ mật khẩu');
-        localStorage.removeItem('note_pass_' + slug);
-        setSuccess(t.passwordModal.successRemoved);
-        onPasswordChanged(false);
-        setTimeout(() => { onClose(); setSuccess(null); }, 1000);
-        return;
-      }
-
-      const token = localStorage.getItem('notepad_token');
-      const res = await fetch(getApiUrl(`/api/note/${slug}/set-password`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ password: '', currentPassword }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed');
-      setSuccess(t.passwordModal.successRemoved);
-      onPasswordChanged(false);
+      await call('');
+      setSuccess(t.passwordModal.successRemoved); onPasswordChanged(false);
       setTimeout(() => { onClose(); setSuccess(null); }, 1000);
     } catch (err: any) { setError(err.message); } finally { setSubmitting(false); }
   };
