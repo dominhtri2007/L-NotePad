@@ -1,12 +1,12 @@
 # L-NotePad 📝
 
-> A modern, lightning-fast, real-time collaborative online notepad with custom URLs, password protection, and multilingual support.
+> A modern, lightning-fast, real-time collaborative online notepad with instant sync, custom URLs, password protection, and multilingual support.
 
 ![Node.js](https://img.shields.io/badge/Node.js-v18%2B-green.svg)
 ![React](https://img.shields.io/badge/React-18-blue.svg)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue.svg)
 ![Vite](https://img.shields.io/badge/Vite-5-purple.svg)
-![SQLite](https://img.shields.io/badge/Database-SQLite3-lightgrey.svg)
+![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL%20%7C%20Supabase-336791.svg)
 ![Socket.IO](https://img.shields.io/badge/Realtime-Socket.IO-black.svg)
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
@@ -14,16 +14,18 @@
 
 ## ✨ Features
 
-- ⚡ **Real-time Collaboration**: Instant bidirectional synchronization across multiple devices and tabs using WebSocket (`Socket.IO`).
+- ⚡ **Multi-Tier Real-Time Collaboration**:
+  - **Zero-Latency Cross-Tab Sync**: Powered by the browser `BroadcastChannel` API for instantaneous (<5ms) keystroke mirroring across open tabs without network latency.
+  - **Cross-Device Cloud Sync**: Real-time updates delivered via Supabase Realtime Channels, adaptive high-performance polling, and Socket.IO for connected devices.
 - 🔗 **Customizable URLs / Slugs**: Access or share any note with a custom address (e.g., `/{custom-slug}`) with immediate live slug migration.
 - 🔒 **Password Protection**: Lock private notes with bcrypt password hashing. Lock screen shields unauthorized access.
 - 👁️ **Read-Only Share Mode**: Generate dedicated view-only links (`/share/{slug}`) that automatically update live without granting edit permissions.
 - 🌐 **Multilingual (i18n)**: Full native localization support with persistent preferences and auto browser detection:
-  - 🇻🇳 Vietnamese (`vi`)
   - 🇺🇸 English (`en`)
+  - 🇻🇳 Vietnamese (`vi`)
   - 🇨🇳 Chinese (`zh`)
   - 🇷🇺 Russian (`ru`)
-- 💾 **SQLite Storage**: Powered by `better-sqlite3` with Write-Ahead Logging (`WAL` mode) for maximum speed and data reliability.
+- 💾 **Dual Database Architecture**: Direct PostgreSQL integration (Supabase Cloud Direct & Pooler) with seamless local SQLite3 fallback (`WAL` mode).
 - 📄 **Raw Text API**: Fetch plaintext content effortlessly via `/raw/:slug` (supports curl and script integrations).
 - 👤 **User Accounts & Dashboard**:
   - Register & login secured with SVG Captcha validation.
@@ -40,14 +42,14 @@
 - **Bundler & Tooling**: Vite
 - **Styling**: Tailwind CSS
 - **Icons**: Lucide React
-- **Realtime**: `socket.io-client`
+- **Realtime**: `BroadcastChannel` API + `supabase-js` + `socket.io-client`
 - **Routing**: `react-router-dom`
 
-### Backend (`/server`)
-- **Runtime**: Node.js & Express
-- **Database**: SQLite3 via `better-sqlite3` (`WAL` journal mode)
-- **Realtime Engine**: `socket.io`
-- **Auth & Security**: `jsonwebtoken` (JWT), `bcryptjs`
+### Backend (`/server` & `/api`)
+- **Runtime**: Node.js & Express (supports both standalone server and Vercel Serverless Function via `api/index.js`)
+- **Database**: PostgreSQL (Supabase Cloud) / SQLite3 via `better-sqlite3` (`WAL` journal mode)
+- **Realtime Engine**: BroadcastChannel + HTTP Polling + Supabase Channels + Socket.IO
+- **Auth & Security**: `jsonwebtoken` (JWT), `bcryptjs`, SVG Captcha
 
 ---
 
@@ -55,23 +57,28 @@
 
 ```text
 L-NotePad/
-├── client/                 # React frontend
+├── api/                    # Vercel Serverless Function entry point
+│   └── index.js            # Express serverless bridge
+├── client/                 # React frontend application
 │   ├── src/
 │   │   ├── components/     # UI components (Navbar, Toolbar, Editor, Modals)
 │   │   ├── context/        # React contexts (LanguageContext, AuthContext)
-│   │   ├── i18n/           # Internationalization dictionaries (vi, en, zh, ru)
+│   │   ├── i18n/           # Internationalization dictionaries (en, vi, zh, ru)
 │   │   ├── pages/          # NotePage, SharePage, MyNotesPage
+│   │   ├── services/       # Supabase and API service clients
 │   │   └── types/          # TypeScript definitions
 │   ├── package.json
 │   └── vite.config.ts
-├── server/                 # Express & Socket.IO backend
+├── server/                 # Express backend & database services
 │   ├── src/
-│   │   ├── routes/         # Auth and Notes API endpoints
-│   │   ├── captcha.js      # Captcha generator & verification
-│   │   ├── db.js           # SQLite database schema and operations
-│   │   └── index.js        # Main server entry & socket handler
-│   ├── data/               # SQLite database storage (notepad.db)
+│   │   ├── routes/         # Auth and Notes REST API routes
+│   │   ├── captcha.js      # SVG Captcha generation & verification
+│   │   ├── db.js           # PostgreSQL & SQLite unified database layer
+│   │   ├── app.js          # Express application setup
+│   │   └── index.js        # Standalone server & Socket.IO entry point
+│   ├── supabase_schema.sql # Supabase PostgreSQL schema & tables
 │   └── package.json
+├── vercel.json             # Vercel serverless routing & SPA rewrite configuration
 ├── package.json            # Root workspace scripts
 ├── .gitignore
 └── README.md
@@ -124,50 +131,41 @@ From the root directory:
 
 ---
 
-## ⚡ Triển khai lên Vercel (Vercel Deployment)
+## ⚡ Deployment on Vercel (100% Serverless)
 
-Thư mục này đã được tối ưu sẵn 100% để deploy trực tiếp lên [Vercel](https://vercel.com):
-- Đã có file cấu hình `vercel.json` định tuyến SPA rewrites và đường dẫn output `client/dist`.
-- Lệnh build tự động cài đặt dependency của client và biên dịch Vite (`cd client && npm install && npm run build`).
-- Tích hợp chế độ lưu trữ cục bộ (Offline / LocalStorage fallback) giúp ứng dụng hoạt động ngay trên Vercel kể cả khi chưa cấu hình backend server.
+This repository is optimized for deployment on [Vercel](https://vercel.com) as a full-stack serverless application:
+- `vercel.json` routes `/api/*` requests to the serverless Express function in `api/index.js`.
+- Frontend SPA routing rewrites all other routes to the compiled Vite bundle in `client/dist`.
+- Built-in multi-layer synchronization (BroadcastChannel + polling fallback) ensures instant live updates across tabs and devices.
 
-### Các bước Deploy lên Vercel:
-1. Đẩy code lên GitHub.
-2. Truy cập [Vercel Dashboard](https://vercel.com/new) -> **Import Git Repository**.
-3. Vercel sẽ tự động phát hiện cấu hình từ file `vercel.json`. Bấm **Deploy**.
-4. *(Tùy chọn - Kết nối Backend đầy đủ)*:
-   - Nếu bạn deploy backend lên [Render.com](https://render.com) hoặc [Railway.app](https://railway.app):
-   - Vào Vercel: **Settings** -> **Environment Variables** -> Thêm:
-     - Key: `VITE_BACKEND_URL`
-     - Value: `https://your-backend-service.onrender.com`
-   - Bấm **Redeploy** để frontend kết nối realtime đồng bộ đám mây và database SQLite.
+### Deployment Steps:
+1. Push your repository to GitHub.
+2. Go to the [Vercel Dashboard](https://vercel.com/new) and click **Import Project**.
+3. Under **Environment Variables**, add:
+   - `DATABASE_URL`: Your Supabase PostgreSQL connection string (e.g., `postgresql://postgres:[PASSWORD]@...`).
+   - `JWT_SECRET`: A secret string used for signing user authentication tokens.
+4. Click **Deploy**. Vercel will install dependencies, compile the frontend, and deploy the serverless API.
 
 ---
 
-## ⚡ Cấu hình Database Supabase (Khuyên dùng cho Vercel)
+## 🗄️ Supabase Database Setup (Recommended for Cloud)
 
-Dự án đã tích hợp trực tiếp **Supabase Cloud PostgreSQL** và **Supabase Realtime**, giúp ứng dụng hoạt động 100% Serverless trên Vercel mà **KHÔNG CẦN** bất kỳ server backend nào!
+L-NotePad directly connects to Supabase Cloud PostgreSQL, eliminating the need for standalone backend servers:
 
-### Bước 1: Tạo Database trên Supabase
-1. Đăng ký/Đăng nhập tại [https://supabase.com](https://supabase.com).
-2. Tạo một Project mới (chọn Region Singapore hoặc gần bạn nhất).
-3. Vào mục **SQL Editor** (biểu tượng `>_` ở thanh menu bên trái).
-4. Mở file `supabase_schema.sql` có sẵn trong thư mục dự án, copy toàn bộ nội dung và dán vào SQL Editor -> Bấm **Run** để khởi tạo bảng và bật Realtime sync.
+### Step 1: Create a Supabase Project
+1. Sign up or log in at [supabase.com](https://supabase.com).
+2. Create a new project in your preferred region.
+3. Navigate to the **SQL Editor** (`>_` icon on the left menu).
+4. Copy the contents of `supabase_schema.sql` from this repository, paste into the SQL Editor, and click **Run** to set up tables and indexes.
 
-### Bước 2: Lấy API Keys của Supabase
-1. Vào **Project Settings** (biểu tượng bánh răng ở góc dưới bên trái) -> Chọn **API**.
-2. Copy 2 thông tin:
-   - **Project URL** (ví dụ: `https://xyzcompany.supabase.co`)
-   - **Project API Keys** -> `anon` / `public` key
+### Step 2: Retrieve PostgreSQL Connection String
+1. In your Supabase dashboard, go to **Project Settings** -> **Database**.
+2. Copy the **Connection string** (URI format) and replace `[YOUR-PASSWORD]` with your database password.
+3. Use the direct URL or session pooler URL for IPv4 compatibility.
 
-### Bước 3: Cấu hình biến môi trường trên Vercel
-1. Vào trang dự án trên [Vercel Dashboard](https://vercel.com) -> **Settings** -> **Environment Variables**.
-2. Thêm 2 biến sau:
-   - `VITE_SUPABASE_URL`: dán Project URL của bạn.
-   - `VITE_SUPABASE_ANON_KEY`: dán anon public key của bạn.
-3. Bấm **Redeploy** trên Vercel.
-
-🎉 **Xong!** Ứng dụng của bạn trên Vercel giờ đây lưu trữ dữ liệu vĩnh viễn trên Supabase Cloud và đồng bộ real-time nhiều người cùng lúc cực nhanh thông qua Supabase Realtime Channels!
+### Step 3: Configure Environment Variables
+- In local development: Add `DATABASE_URL` and `JWT_SECRET` to `.env` or `server/.env`.
+- In Vercel: Add `DATABASE_URL` and `JWT_SECRET` under **Project Settings** -> **Environment Variables**.
 
 
 ## 📡 API Endpoints Summary
